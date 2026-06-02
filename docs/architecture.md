@@ -12,7 +12,23 @@
 4. 内容质量分和互动数据共同影响分发。
 5. MVP 保持可演示，架构保留扩展空间。
 
-## 2. 总体架构
+## 2. 应用技术栈
+
+| 层级 | 技术选型 | 说明 |
+| --- | --- | --- |
+| Monorepo | pnpm workspace | 管理 `apps/*` 与 `packages/*`，统一脚本、依赖和类型检查 |
+| 前端框架 | Next.js + React + TypeScript | 承载页面路由、创作工作台、榜单、详情页和登录态管理 |
+| 前端样式 | Tailwind CSS 主导 + 少量全局 CSS | 页面与组件样式优先使用 Tailwind utility class，全局 CSS 仅承载 reset、设计变量、基础排版和第三方组件兜底 |
+| 富文本编辑 | TipTap / ProseMirror JSON | 编辑器内容以前后端可共享的结构化 JSON 存储 |
+| 后端框架 | NestJS + TypeScript | 承载鉴权、草稿、AI Gateway、审核、评分、发布和分发业务 |
+| 数据库 | PostgreSQL + Prisma | 存储用户、草稿、版本、审核记录、质量分、文章和互动数据 |
+| 缓存/榜单 | Redis Sorted Set | 承载热点榜、爆文榜、Prompt 缓存、限流和编辑锁等能力 |
+| AI 接入 | OpenAI SDK 兼容模式 | 统一适配火山方舟、豆包或其他 OpenAI-compatible 模型供应商 |
+| 鉴权 | JWT + bcrypt | 密码哈希存储，登录后签发 access token |
+| 测试 | TypeScript typecheck、Jest/Vitest、Supertest、Playwright | 覆盖类型检查、服务单测、接口测试和端到端流程 |
+| 部署 | Vercel + Railway/Render/ECS + 托管 PostgreSQL/Redis | MVP 优先选择低运维成本的托管平台 |
+
+## 3. 总体架构
 
 ```text
 Browser
@@ -30,7 +46,7 @@ NestJS API
   +---------------------> PostgreSQL(Prisma)
 ```
 
-## 3. Monorepo 分层
+## 4. Monorepo 分层
 
 ```text
 apps/web
@@ -56,9 +72,9 @@ packages/shared
   - API 约定
 ```
 
-## 4. 前端架构
+## 5. 前端架构
 
-### 4.1 页面结构
+### 5.1 页面结构
 
 ```text
 apps/web/src/app
@@ -72,7 +88,7 @@ apps/web/src/app
 └── articles/[id]/page.tsx   # 内容详情
 ```
 
-### 4.2 前端职责
+### 5.2 前端职责
 
 - 表单输入、编辑器交互、状态反馈。
 - 使用 TipTap 生成 ProseMirror JSON。
@@ -81,7 +97,23 @@ apps/web/src/app
 - 断网时缓存未同步内容，恢复网络后重放保存请求。
 - 页面性能优化：SSR/SSG、图片懒加载、虚拟滚动或分页、避免首屏大包。
 
-## 5. 后端架构
+### 5.3 样式策略
+
+前端样式采用 Tailwind CSS 主导，全局 CSS 辅助。
+
+选择 Tailwind 作为主导的原因：
+
+- 页面以表单、编辑器、榜单、详情页和状态反馈为主，组件粒度清晰，utility-first 写法能让布局、间距、响应式和状态样式贴近 JSX，减少跨文件查找成本。
+- Tailwind 的约束化 token 有利于保持颜色、间距、字号和断点一致，适合训练营 MVP 快速迭代，也便于后续沉淀组件。
+- 全局 CSS 容易形成隐式覆盖和选择器耦合，因此不承载业务页面样式，避免页面之间互相影响。
+
+全局 CSS 仅用于：
+
+- Tailwind base 引入、浏览器 reset 和基础 `html/body` 样式。
+- 项目级 CSS 变量，如颜色、背景、边框、阴影和字体族。
+- 富文本编辑器、第三方组件或 Markdown 内容中难以直接挂 Tailwind class 的局部基础样式。
+
+## 6. 后端架构
 
 ```text
 apps/api/src
@@ -101,7 +133,7 @@ apps/api/src
 └── common/        # 过滤器、管道、工具
 ```
 
-### 5.1 AI Gateway
+### 6.1 AI Gateway
 
 AI Gateway 统一处理：
 
@@ -113,7 +145,7 @@ AI Gateway 统一处理：
 - 超时、重试、降级。
 - 请求日志和 token 使用量统计。
 
-### 5.2 审核流水线
+### 6.2 审核流水线
 
 审核不是单个接口，而是贯穿内容生命周期：
 
@@ -130,7 +162,7 @@ AI Gateway 统一处理：
 - `WARN`：中风险，允许用户修改后重审。
 - `PASS`：通过。
 
-### 5.3 质量评分
+### 6.3 质量评分
 
 评分服务接收文章标题、正文、素材摘要、目标受众和热点上下文，输出结构化评分：
 
@@ -147,7 +179,7 @@ AI Gateway 统一处理：
 }
 ```
 
-## 6. 数据模型
+## 7. 数据模型
 
 核心表：
 
@@ -165,7 +197,7 @@ AI Gateway 统一处理：
 | engagement_events | 阅读、点赞、收藏等事件 |
 | ranking_snapshots | 榜单快照 |
 
-## 7. Redis 设计
+## 8. Redis 设计
 
 | Key | 用途 |
 | --- | --- |
@@ -175,9 +207,9 @@ AI Gateway 统一处理：
 | `audit:rate:{userId}` | 审核接口限流 |
 | `cache:prompt:platform` | 平台 Prompt 缓存 |
 
-## 8. API 设计
+## 9. API 设计
 
-### 8.1 用户
+### 9.1 用户
 
 ```text
 POST /auth/register
@@ -185,7 +217,7 @@ POST /auth/login
 GET  /users/me
 ```
 
-### 8.2 创作
+### 9.2 创作
 
 ```text
 POST /ai/generate-outline
@@ -195,7 +227,7 @@ GET  /prompts
 POST /prompts
 ```
 
-### 8.3 草稿
+### 9.3 草稿
 
 ```text
 POST   /drafts
@@ -206,7 +238,7 @@ GET    /drafts/:id/versions
 POST   /drafts/:id/restore
 ```
 
-### 8.4 审核与发布
+### 9.4 审核与发布
 
 ```text
 POST /audit/check
@@ -216,7 +248,7 @@ PATCH /articles/:id
 POST /articles/:id/withdraw
 ```
 
-### 8.5 分发
+### 9.5 分发
 
 ```text
 GET /feed
@@ -226,7 +258,7 @@ GET /articles/:id
 POST /articles/:id/events
 ```
 
-## 9. 榜单排序
+## 10. 榜单排序
 
 基础分：
 
@@ -252,7 +284,7 @@ freshness_score = 100 / (1 + hours_since_publish / 12)
 
 Redis 中存储实时榜单，PostgreSQL 中定期保存榜单快照，便于复盘和展示。
 
-## 10. 部署架构
+## 11. 部署架构
 
 MVP 推荐：
 
@@ -271,7 +303,7 @@ MVP 推荐：
 - `AI_MODEL`
 - `NEXT_PUBLIC_API_BASE_URL`
 
-## 11. 测试策略
+## 12. 测试策略
 
 | 类型 | 工具 | 覆盖 |
 | --- | --- | --- |
@@ -280,11 +312,41 @@ MVP 推荐：
 | E2E | Playwright | 创作到发布完整链路 |
 | 性能 | Lighthouse | 首页、榜单、详情页 LCP |
 
-## 12. 可观测与容错
+### 12.1 E2E 测试
+
+E2E 使用 Playwright，验证用户视角下的核心闭环，不替代单元测试和接口测试。
+
+覆盖范围：
+
+- 注册/登录/退出：验证鉴权态、token 写入与受保护页面跳转。
+- 创作工作台：输入主题、选择风格、触发 AI 生成标题、大纲和正文。
+- 编辑器与草稿：修改正文、主动保存、自动保存、刷新后草稿内容可恢复。
+- 审核与评分：发布前触发审核和质量评分，覆盖 `PASS`、`WARN`、`BLOCK` 三类结果。
+- 发布与分发：审核通过后生成文章详情页，文章出现在推荐流、热点榜或爆文榜中。
+- 互动反馈：打开详情页、点赞、收藏等事件能被记录，并影响展示数据。
+
+测试数据与外部依赖：
+
+- E2E 环境使用独立测试数据库或可重置 seed 数据。
+- AI Gateway、审核和评分可使用 mock provider，固定返回可预测结果，避免模型波动导致测试不稳定。
+- 每个用例创建独立测试用户和草稿，结束后清理或重置数据。
+
+关键断言：
+
+- 页面关键状态可见，例如生成中、保存成功、审核警告、发布成功。
+- 后端状态流转正确，例如草稿版本、审核记录、质量分、文章快照和互动事件被写入。
+- 浏览器控制台无未处理异常，关键 API 无 5xx。
+
+执行策略：
+
+- 本地开发优先运行关键 smoke 用例：登录 -> 创作 -> 审核通过 -> 发布 -> 查看详情。
+- CI 在完成 `pnpm typecheck`、后端接口测试和前端 build 后启动 Web/API 测试服务，再运行 Playwright。
+- 耗时较长或依赖复杂数据的完整 E2E 用例可按标签区分为 `smoke` 和 `full`，MVP 阶段至少保证 smoke 用例稳定。
+
+## 13. 可观测与容错
 
 - AI 请求记录 requestId、模型、耗时、token、状态。
 - 审核记录保存模型输出和最终决策。
 - 发布失败保留草稿，不丢失编辑内容。
 - AI 服务不可用时返回明确错误和重试入口。
 - Redis 不可用时回退到 PostgreSQL 排序。
-
