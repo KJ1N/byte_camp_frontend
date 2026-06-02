@@ -356,7 +356,8 @@ h1 {
   margin-top: 14px;
 }
 
-.form-field span {
+.form-field > span,
+.form-field > label {
   color: #344154;
   display: block;
   font-size: 14px;
@@ -381,6 +382,44 @@ h1 {
 .form-field input:focus {
   border-color: #1d4ed8;
   box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.13);
+}
+
+.password-control {
+  position: relative;
+}
+
+.password-control input {
+  padding-right: 76px;
+}
+
+.password-control input::-ms-clear,
+.password-control input::-ms-reveal {
+  display: none;
+}
+
+.password-toggle {
+  background: #edf2f8;
+  border: 1px solid #d7deea;
+  border-radius: 6px;
+  color: #1d4ed8;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 6px 10px;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.password-toggle:hover {
+  background: #e1e8f3;
+}
+
+.password-toggle:focus-visible {
+  outline: 3px solid rgba(29, 78, 216, 0.2);
+  outline-offset: 2px;
 }
 
 .form-error {

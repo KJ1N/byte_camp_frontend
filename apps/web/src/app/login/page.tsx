@@ -32,6 +32,7 @@ export default function LoginPage() {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [nickname, setNickname] = useState("");
   const [status, setStatus] = useState<SubmitState>("idle");
   const [error, setError] = useState("");
@@ -181,16 +182,28 @@ export default function LoginPage() {
             />
           </label>
 
-          <label className="form-field">
-            <span>密码</span>
-            <input
-              autoComplete={isRegister ? "new-password" : "current-password"}
-              placeholder="请输入密码"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </label>
+          <div className="form-field">
+            <label htmlFor="login-password">密码</label>
+            <div className="password-control">
+              <input
+                id="login-password"
+                autoComplete={isRegister ? "new-password" : "current-password"}
+                placeholder="请输入密码"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              <button
+                aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                aria-pressed={showPassword}
+                className="password-toggle"
+                type="button"
+                onClick={() => setShowPassword((current) => !current)}
+              >
+                {showPassword ? "隐藏" : "显示"}
+              </button>
+            </div>
+          </div>
 
           {error ? (
             <p className="form-error" role="alert">
