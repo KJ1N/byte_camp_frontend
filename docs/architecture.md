@@ -1,0 +1,290 @@
+# 技术架构设计
+
+## 1. 架构目标
+
+本项目采用“薄前端、厚后端、AI 能力集中编排”的架构。前端专注交互、编辑器、状态展示；后端负责 AI 调用、Prompt 编排、审核、评分、发布、分发排序和数据持久化。
+
+核心原则：
+
+1. AI 调用统一通过后端网关，避免前端暴露模型密钥。
+2. Prompt 是数据，不是散落在代码中的字符串。
+3. 审核是发布链路的强约束，不是可选提示。
+4. 内容质量分和互动数据共同影响分发。
+5. MVP 保持可演示，架构保留扩展空间。
+
+## 2. 总体架构
+
+```text
+Browser
+  |
+  | HTTPS
+  v
+Next.js Web
+  |
+  | REST/SSE
+  v
+NestJS API
+  |        |         |
+  |        |         +--> AI Provider(OpenAI compatible / Volcano Ark / Doubao)
+  |        +------------> Redis(ranking, cache, rate limit)
+  +---------------------> PostgreSQL(Prisma)
+```
+
+## 3. Monorepo 分层
+
+```text
+apps/web
+  - 页面路由
+  - 创作工作台
+  - 富文本编辑器
+  - 榜单和详情页
+  - 登录态管理
+
+apps/api
+  - 用户与鉴权
+  - 草稿、版本、发布
+  - Prompt 管理
+  - AI Gateway
+  - 审核与评分
+  - 榜单排序
+  - 数据反馈
+
+packages/shared
+  - 枚举
+  - DTO 类型
+  - 评分权重
+  - API 约定
+```
+
+## 4. 前端架构
+
+### 4.1 页面结构
+
+```text
+apps/web/src/app
+├── page.tsx                 # 工作台首页
+├── login/page.tsx           # 登录
+├── drafts/page.tsx          # 我的草稿
+├── drafts/[id]/page.tsx     # 编辑器
+├── publish/[id]/page.tsx    # 发布确认
+├── feed/page.tsx            # 推荐流
+├── rankings/page.tsx        # 热点/爆文榜
+└── articles/[id]/page.tsx   # 内容详情
+```
+
+### 4.2 前端职责
+
+- 表单输入、编辑器交互、状态反馈。
+- 使用 TipTap 生成 ProseMirror JSON。
+- 通过 API 获取 AI 生成结果、审核结果和榜单数据。
+- 草稿自动保存时做 debounce。
+- 断网时缓存未同步内容，恢复网络后重放保存请求。
+- 页面性能优化：SSR/SSG、图片懒加载、虚拟滚动或分页、避免首屏大包。
+
+## 5. 后端架构
+
+```text
+apps/api/src
+├── auth/          # JWT 鉴权、登录注册
+├── users/         # 用户资料
+├── drafts/        # 草稿与版本
+├── prompts/       # Prompt 库
+├── assets/        # 素材上传与校验
+├── ai-gateway/    # 模型适配与 Prompt 装配
+├── audit/         # 安全审核
+├── scoring/       # 质量评分
+├── publish/       # 发布与快照
+├── feed/          # 内容流
+├── ranking/       # 榜单计算
+├── analytics/     # 阅读与互动数据
+├── prisma/        # Prisma Service
+└── common/        # 过滤器、管道、工具
+```
+
+### 5.1 AI Gateway
+
+AI Gateway 统一处理：
+
+- 模型供应商配置。
+- OpenAI compatible SDK 调用。
+- Prompt 模板渲染。
+- JSON schema 输出约束。
+- SSE 流式返回。
+- 超时、重试、降级。
+- 请求日志和 token 使用量统计。
+
+### 5.2 审核流水线
+
+审核不是单个接口，而是贯穿内容生命周期：
+
+| 阶段 | 触发点 | 动作 |
+| --- | --- | --- |
+| 输入阶段 | 用户提交主题/素材 | 基础风险校验 |
+| 生成阶段 | AI 输出后 | 审核生成内容片段 |
+| 发布前 | 点击发布 | 强制安全审核和质量评分 |
+| 发布后 | 举报/巡检 | 下线、回滚、复审 |
+
+风险等级：
+
+- `BLOCK`：高危，禁止发布。
+- `WARN`：中风险，允许用户修改后重审。
+- `PASS`：通过。
+
+### 5.3 质量评分
+
+评分服务接收文章标题、正文、素材摘要、目标受众和热点上下文，输出结构化评分：
+
+```json
+{
+  "contentValue": 86,
+  "expressionQuality": 82,
+  "readerExperience": 78,
+  "spreadPotential": 74,
+  "safetyScore": 95,
+  "overall": 83,
+  "reasons": ["结构清晰", "标题吸引力一般"],
+  "suggestions": ["补充案例", "优化结尾行动号召"]
+}
+```
+
+## 6. 数据模型
+
+核心表：
+
+| 表 | 说明 |
+| --- | --- |
+| users | 用户 |
+| drafts | 草稿当前态 |
+| draft_versions | 草稿版本快照 |
+| prompts | 平台和用户 Prompt |
+| assets | 用户素材 |
+| audit_records | 审核记录 |
+| quality_scores | 内容质量分 |
+| articles | 已发布文章 |
+| article_revisions | 发布后编辑版本 |
+| engagement_events | 阅读、点赞、收藏等事件 |
+| ranking_snapshots | 榜单快照 |
+
+## 7. Redis 设计
+
+| Key | 用途 |
+| --- | --- |
+| `rank:hot` | 热点榜 sorted set |
+| `rank:top` | 爆文榜 sorted set |
+| `draft:lock:{id}` | 编辑锁/版本冲突辅助 |
+| `audit:rate:{userId}` | 审核接口限流 |
+| `cache:prompt:platform` | 平台 Prompt 缓存 |
+
+## 8. API 设计
+
+### 8.1 用户
+
+```text
+POST /auth/register
+POST /auth/login
+GET  /users/me
+```
+
+### 8.2 创作
+
+```text
+POST /ai/generate-outline
+POST /ai/generate-article
+POST /ai/rewrite
+GET  /prompts
+POST /prompts
+```
+
+### 8.3 草稿
+
+```text
+POST   /drafts
+GET    /drafts/mine
+GET    /drafts/:id
+PATCH  /drafts/:id
+GET    /drafts/:id/versions
+POST   /drafts/:id/restore
+```
+
+### 8.4 审核与发布
+
+```text
+POST /audit/check
+POST /scoring/article
+POST /publish/:draftId
+PATCH /articles/:id
+POST /articles/:id/withdraw
+```
+
+### 8.5 分发
+
+```text
+GET /feed
+GET /rankings/hot
+GET /rankings/top
+GET /articles/:id
+POST /articles/:id/events
+```
+
+## 9. 榜单排序
+
+基础分：
+
+```text
+rank_score =
+  quality_score * 0.45 +
+  hot_score * 0.35 +
+  freshness_score * 0.15 +
+  feedback_score * 0.05
+```
+
+热度分：
+
+```text
+hot_score = views * 1 + likes * 4 + favorites * 6 + comments * 8
+```
+
+时间衰减：
+
+```text
+freshness_score = 100 / (1 + hours_since_publish / 12)
+```
+
+Redis 中存储实时榜单，PostgreSQL 中定期保存榜单快照，便于复盘和展示。
+
+## 10. 部署架构
+
+MVP 推荐：
+
+- Web：Vercel。
+- API：Railway / Render / 云服务器 Docker。
+- PostgreSQL：Railway Postgres / Supabase / Neon。
+- Redis：Upstash / Railway Redis。
+
+生产环境变量：
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `JWT_SECRET`
+- `AI_BASE_URL`
+- `AI_API_KEY`
+- `AI_MODEL`
+- `NEXT_PUBLIC_API_BASE_URL`
+
+## 11. 测试策略
+
+| 类型 | 工具 | 覆盖 |
+| --- | --- | --- |
+| 单元测试 | Vitest/Jest | 评分、排序、Prompt 渲染 |
+| 接口测试 | Jest + Supertest | 登录、草稿、发布、审核 |
+| E2E | Playwright | 创作到发布完整链路 |
+| 性能 | Lighthouse | 首页、榜单、详情页 LCP |
+
+## 12. 可观测与容错
+
+- AI 请求记录 requestId、模型、耗时、token、状态。
+- 审核记录保存模型输出和最终决策。
+- 发布失败保留草稿，不丢失编辑内容。
+- AI 服务不可用时返回明确错误和重试入口。
+- Redis 不可用时回退到 PostgreSQL 排序。
+

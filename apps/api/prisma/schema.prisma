@@ -1,0 +1,234 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DraftMode {
+  FAST
+  FINE
+}
+
+enum DraftStatus {
+  DRAFT
+  REVIEWING
+  PUBLISHED
+  REJECTED
+}
+
+enum PromptOwner {
+  PLATFORM
+  PRIVATE
+}
+
+enum ArticleStatus {
+  PUBLISHED
+  WITHDRAWN
+}
+
+enum AuditDecision {
+  PASS
+  WARN
+  BLOCK
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  nickname     String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  drafts   Draft[]
+  prompts  Prompt[]
+  assets   Asset[]
+  articles Article[]
+
+  @@map("users")
+}
+
+model Draft {
+  id        String      @id @default(cuid())
+  authorId  String
+  mode      DraftMode   @default(FAST)
+  status    DraftStatus @default(DRAFT)
+  title     String
+  body      Json
+  version   Int         @default(1)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  author       User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  versions     DraftVersion[]
+  auditRecords AuditRecord[]
+  scores       QualityScore[]
+  articles     Article[]
+
+  @@index([authorId, status])
+  @@map("drafts")
+}
+
+model DraftVersion {
+  id        String   @id @default(cuid())
+  draftId   String
+  title     String
+  snapshot  Json
+  version   Int
+  createdAt DateTime @default(now())
+
+  draft Draft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@index([draftId, version])
+  @@map("draft_versions")
+}
+
+model Prompt {
+  id             String      @id @default(cuid())
+  owner          PromptOwner
+  authorId       String?
+  name           String
+  category       String
+  systemPrompt   String      @db.Text
+  userTemplate   String      @db.Text
+  paramsSchema   Json
+  fewShots       Json
+  sourcePromptId String?
+  isStarter      Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  author       User?    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  sourcePrompt Prompt?  @relation("PromptCopy", fields: [sourcePromptId], references: [id])
+  copies       Prompt[] @relation("PromptCopy")
+
+  @@index([owner, category])
+  @@index([authorId])
+  @@map("prompts")
+}
+
+model Asset {
+  id          String   @id @default(cuid())
+  authorId    String
+  filename    String
+  mimeType    String
+  url         String
+  auditStatus String   @default("PENDING")
+  metadata    Json
+  createdAt   DateTime @default(now())
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([authorId])
+  @@map("assets")
+}
+
+model AuditRecord {
+  id          String        @id @default(cuid())
+  draftId     String?
+  articleId   String?
+  stage       String
+  decision    AuditDecision
+  riskLevel   String
+  categories  String[]
+  evidence    Json
+  suggestions Json
+  rawResult   Json
+  createdAt   DateTime      @default(now())
+
+  draft   Draft?   @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  article Article? @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([draftId, decision])
+  @@index([articleId, decision])
+  @@map("audit_records")
+}
+
+model QualityScore {
+  id                 String   @id @default(cuid())
+  draftId            String?
+  articleId          String?
+  contentValue       Int
+  expressionQuality  Int
+  readerExperience   Int
+  spreadPotential    Int
+  safetyScore        Int
+  overall            Int
+  reasons            Json
+  suggestions        Json
+  createdAt          DateTime @default(now())
+
+  draft   Draft?   @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  article Article? @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([draftId])
+  @@index([articleId])
+  @@map("quality_scores")
+}
+
+model Article {
+  id          String        @id @default(cuid())
+  authorId    String
+  draftId     String
+  status      ArticleStatus @default(PUBLISHED)
+  title       String
+  body        Json
+  summary     String
+  publishedAt DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  author       User              @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  draft        Draft             @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  revisions    ArticleRevision[]
+  auditRecords AuditRecord[]
+  scores       QualityScore[]
+  events       EngagementEvent[]
+
+  @@index([status, publishedAt])
+  @@index([authorId])
+  @@map("articles")
+}
+
+model ArticleRevision {
+  id        String   @id @default(cuid())
+  articleId String
+  title     String
+  body      Json
+  reason    String?
+  createdAt DateTime @default(now())
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId])
+  @@map("article_revisions")
+}
+
+model EngagementEvent {
+  id        String   @id @default(cuid())
+  articleId String
+  type      String
+  userKey   String?
+  value     Int      @default(1)
+  createdAt DateTime @default(now())
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@index([articleId, type])
+  @@index([createdAt])
+  @@map("engagement_events")
+}
+
+model RankingSnapshot {
+  id        String   @id @default(cuid())
+  name      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  @@index([name, createdAt])
+  @@map("ranking_snapshots")
+}
+

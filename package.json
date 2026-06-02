@@ -1,0 +1,33 @@
+{
+  "name": "bytecamp-aigc-creator-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI creator production, audit, and distribution platform for ByteCamp frontend training.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "lint": "pnpm -r --parallel lint",
+    "test": "pnpm -r --parallel test",
+    "typecheck": "pnpm -r typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d",
+    "db:logs": "docker compose logs -f",
+    "prisma:generate": "pnpm --filter @bytecamp-aigc/api prisma:generate",
+    "prisma:migrate": "pnpm --filter @bytecamp-aigc/api prisma:migrate",
+    "prisma:seed": "pnpm --filter @bytecamp-aigc/api prisma:seed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "prettier": "^3.8.3",
+    "typescript": "^5.9.3"
+  }
+}
