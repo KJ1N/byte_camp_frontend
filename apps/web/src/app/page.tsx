@@ -29,6 +29,7 @@ export default function Home() {
             <a href="#workspace">工作台</a>
             <a href="#architecture">技术框架</a>
             <a href="/docs">文档</a>
+            <a href="/login">登录</a>
           </div>
         </nav>
 
@@ -41,6 +42,7 @@ export default function Home() {
             </p>
             <div className="actions">
               <a className="primary" href="#workspace">查看项目模块</a>
+              <a className="secondary" href="/login">进入登录</a>
               <a className="secondary" href="https://github.com/KJ1N/byte_camp_frontend">GitHub 仓库</a>
             </div>
           </div>
@@ -94,4 +96,3 @@ export default function Home() {
     </main>
   );
 }
-
