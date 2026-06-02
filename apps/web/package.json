@@ -6,9 +6,9 @@
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
-    "lint": "tsc --noEmit -p tsconfig.json",
+    "lint": "next typegen && tsc --noEmit -p tsconfig.json",
     "test": "echo \"Web tests will be added with Vitest/Playwright\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "next typegen && tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@bytecamp-aigc/shared": "workspace:*",
@@ -28,4 +28,3 @@
     "typescript": "^5.9.3"
   }
 }
-
