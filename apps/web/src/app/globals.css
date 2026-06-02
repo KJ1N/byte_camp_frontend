@@ -247,12 +247,13 @@ h1 {
 }
 
 .login-shell {
-  align-items: center;
   display: grid;
   gap: 48px;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
   margin: 0 auto;
   max-width: 1080px;
+  align-items: start;
+  padding-top: 80px;
 }
 
 .login-copy h1 {
