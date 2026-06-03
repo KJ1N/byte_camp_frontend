@@ -23,22 +23,21 @@ const docs = [
 
 export default function DocsPage() {
   return (
-    <main className="docs-page">
-      <a className="back-link" href="/">
+    <main className="mx-auto min-h-screen max-w-[1180px] px-5 py-11 text-[#18202f] md:px-[5vw]">
+      <a className="font-bold text-[#1d4ed8]" href="/">
         返回首页
       </a>
-      <h1>项目文档</h1>
-      <p>这些文档位于仓库根目录的 docs 文件夹中，覆盖产品、架构、审核和交付评估。</p>
-      <div className="module-grid">
+      <h1 className="my-3 text-[clamp(36px,6vw,60px)] leading-tight font-bold">项目文档</h1>
+      <p className="mb-7 leading-8 text-[#5f6d83]">这些文档位于仓库根目录的 docs 文件夹中，覆盖产品、架构、审核和交付评估。</p>
+      <div className="grid gap-4 md:grid-cols-3">
         {docs.map((doc) => (
-          <article className="module-card" key={doc.title}>
-            <h3>{doc.title}</h3>
-            <p>{doc.description}</p>
-            <p className="doc-path">{doc.path}</p>
+          <article className="rounded-lg border border-[#e0e5ee] bg-white p-5" key={doc.title}>
+            <h3 className="mt-0 text-lg font-bold">{doc.title}</h3>
+            <p className="m-0 leading-7 text-[#5f6d83]">{doc.description}</p>
+            <p className="mt-3.5 font-bold text-[#1d4ed8]">{doc.path}</p>
           </article>
         ))}
       </div>
     </main>
   );
 }
-

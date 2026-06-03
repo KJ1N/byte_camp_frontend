@@ -173,7 +173,7 @@ export default function WorkspacePage() {
       </header>
 
       <div className="mx-auto grid max-w-[1500px] gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="min-h-[calc(100vh-8rem)] bg-white">
+        <section className="min-h-[calc(100vh-8rem)] bg-white rounded-lg">
           <div className="flex flex-wrap items-center gap-2 border-b border-[#eeeeee] px-8 py-4">
             {["撤销", "重做", "清除", "格式", "H", "B", "引用", "列表", "对齐", "代码", "图片", "链接", "更多"].map(
               (item, index) => (
@@ -312,12 +312,14 @@ export default function WorkspacePage() {
               <span>发文设置</span>
             </div>
             <div className="flex flex-wrap items-center gap-3">
+              {/*
               <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button">
                 预览
               </button>
               <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button">
                 定时发布
               </button>
+              */}
               <button
                 className="rounded-md bg-[#ff4d4f] px-6 py-2.5 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
                 disabled={!generated || status === "saving"}
@@ -330,10 +332,10 @@ export default function WorkspacePage() {
           </div>
         </section>
 
-        <aside className="h-fit min-h-[calc(100vh-8rem)] bg-[#fbfdff] px-6 py-8 lg:sticky lg:top-20">
+        <aside className="h-fit min-h-[calc(100vh-8rem)] bg-[#fbfdff] px-6 py-8 lg:sticky lg:top-20 rounded-lg">
           <div className="mb-8 flex items-center justify-center gap-3">
             <span className="h-6 w-6 rounded-md bg-gradient-to-br from-[#ff5f62] to-[#8c7bff]" />
-            <h2 className="text-lg font-semibold">头条创作助手</h2>
+            <h2 className="text-lg font-semibold">AI创作助手</h2>
           </div>
 
           <div className="mb-8 flex gap-8 border-b border-transparent text-sm">
