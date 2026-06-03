@@ -18,7 +18,9 @@
 
 ### 前端 `apps/web`
 
-- 将首页调整为创作工作台入口，未登录时展示登录引导，已登录时展示创作表单和最近草稿。
+- 首页 `/` 保持为内容信息流页面，不直接作为创作工作台。
+- 新增独立工作台路由 `/workspace`，未登录时展示登录引导，已登录时展示创作表单和最近草稿。
+- 首页右上角用户名称 hover 后出现入口菜单，包含“工作台”“草稿箱”和“退出登录”。
 - 新增我的草稿列表页。
 - 新增草稿编辑页，使用 TipTap / ProseMirror JSON 编辑和保存正文。
 - 扩展前端 API 与登录态工具，统一携带 JWT token。
@@ -44,8 +46,14 @@
 - `apps/api/src/ai-gateway/ai-gateway.controller.ts`
 - `apps/api/src/drafts/drafts.controller.ts`
 - `apps/api/src/drafts/drafts.service.ts`
+- `apps/web/src/app/workspace/page.tsx`
+- `apps/web/src/app/workspace/layout.tsx`
 - `apps/web/src/app/drafts/page.tsx`
+- `apps/web/src/app/drafts/layout.tsx`
 - `apps/web/src/app/drafts/[id]/page.tsx`
+- `apps/web/src/app/drafts/[id]/layout.tsx`
+- `apps/web/src/app/login/layout.tsx`
+- `apps/web/src/app/docs/layout.tsx`
 - `apps/web/src/components/editor/rich-text-editor.tsx`
 
 ### 修改文件
@@ -56,6 +64,7 @@
 - `apps/api/src/ai-gateway/ai-gateway.service.ts`
 - `apps/api/src/drafts/drafts.module.ts`
 - `apps/web/src/app/page.tsx`
+- `apps/web/src/app/layout.tsx`
 - `apps/web/src/lib/api.ts`
 - `apps/web/src/lib/auth.ts`
 - `apps/web/src/app/globals.css`
@@ -148,9 +157,32 @@ GET   /drafts/:id/versions
 
 ## 5. 前端交互与页面状态设计
 
-### 首页创作工作台
+### 首页内容页与创作入口
 
-首页从项目介绍页推进为实际工作台，并采用用户提供的今日头条发布页参考图作为视觉模板：
+首页 `/` 是内容消费页，承载推荐内容、热点榜/爆文榜入口和平台内容概览，不直接展示创作编辑器。
+
+- 顶部右侧展示当前用户名称；hover 名称后展开菜单。
+- hover 菜单至少包含“工作台”和“草稿箱”两个入口，分别跳转 `/workspace` 和 `/drafts`。
+- hover 菜单包含“退出登录”，点击后清理本地 token 和 user，并停留或回到首页未登录状态。
+- 未登录时展示登录入口；登录后才展示用户名称菜单。
+- 首页的视觉应保持内容浏览页气质，避免出现创作工具栏和编辑器画布。
+
+### 路由标题
+
+不同路由需要设置不同网页标题：
+
+| 路由 | 网页标题 |
+| --- | --- |
+| `/` | 内容首页 - AI Creator Hub |
+| `/workspace` | 创作工作台 - AI Creator Hub |
+| `/drafts` | 草稿箱 - AI Creator Hub |
+| `/drafts/:id` | 草稿编辑 - AI Creator Hub |
+| `/login` | 登录 - AI Creator Hub |
+| `/docs` | 项目文档 - AI Creator Hub |
+
+### 创作工作台
+
+工作台从首页迁移到 `/workspace`，并采用用户提供的今日头条发布页参考图作为视觉模板：
 
 - 未登录：展示紧凑登录引导和文档入口。
 - 已登录：展示创作表单、AI 生成结果、保存草稿按钮、最近草稿入口。
@@ -252,13 +284,16 @@ GET   /drafts/:id/versions
 ### 手动验证
 
 1. 使用演示账号登录。
-2. 首页显示创作表单和当前用户信息。
-3. 输入主题、受众、风格后生成标题、大纲和正文。
-4. 保存为草稿并跳转到编辑页。
-5. 修改标题或正文，点击手动保存，版本号递增。
-6. 等待自动保存触发，确认保存状态变化。
-7. 返回我的草稿列表，草稿标题、版本号、更新时间正确。
-8. 使用无 token 或错误 token 请求草稿接口，确认返回 401。
+2. 首页显示内容信息流，不显示创作编辑器。
+3. hover 首页右上角用户名称，出现“工作台”“草稿箱”和“退出登录”入口。
+4. 点击“工作台”进入 `/workspace`，显示创作表单和当前用户信息。
+5. 输入主题、受众、风格后生成标题、大纲和正文。
+6. 保存为草稿并跳转到编辑页。
+7. 修改标题或正文，点击手动保存，版本号递增。
+8. 等待自动保存触发，确认保存状态变化。
+9. 返回我的草稿列表，草稿标题、版本号、更新时间正确。
+10. 点击“退出登录”，确认本地登录态被清理，首页恢复登录入口。
+11. 使用无 token 或错误 token 请求草稿接口，确认返回 401。
 
 ## 9. 与总体架构的一致性
 

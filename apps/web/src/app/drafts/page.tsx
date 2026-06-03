@@ -67,7 +67,7 @@ export default function DraftsPage() {
             <Link
               aria-label="返回工作台"
               className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f5f5f5] text-xl text-[#7b8088] hover:bg-[#eeeeee]"
-              href="/"
+              href="/workspace"
             >
               ‹
             </Link>
@@ -76,9 +76,9 @@ export default function DraftsPage() {
               <div className="text-xs text-[#8f959e]">草稿、版本和编辑入口</div>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-sm text-[#4e5661]">
-            <span className="hidden sm:block">{user?.nickname ?? "未登录"}</span>
-            <Link className="rounded-md bg-[#ff4d4f] px-4 py-2 font-medium text-white" href="/">
+          <div className="flex items-center gap-4 text-sm text-[#f8f8f8]">
+            <span className="hidden sm:block font-bold">{user?.nickname ?? "未登录"}</span>
+            <Link className="rounded-md bg-[#ff4d4f] px-4 py-2 font-bold text-white" href="/workspace">
               新建文章
             </Link>
           </div>
@@ -119,7 +119,7 @@ export default function DraftsPage() {
             <div className="px-6 py-16 text-center">
               <h2 className="text-2xl font-semibold">还没有草稿</h2>
               <p className="mt-3 text-sm text-[#8f959e]">回到工作台生成第一篇文章初稿。</p>
-              <Link className="mt-6 inline-flex rounded-md bg-[#ff4d4f] px-5 py-3 text-sm font-semibold text-white" href="/">
+              <Link className="mt-6 inline-flex rounded-md bg-[#ff4d4f] px-5 py-3 text-sm font-semibold text-white" href="/workspace">
                 开始创作
               </Link>
             </div>

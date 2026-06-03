@@ -224,7 +224,7 @@ export default function DraftEditorPage() {
               头条号发文规范
             </Link>
             <span className="hidden sm:block">消息</span>
-            <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]" href="/">
+            <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]" href="/workspace">
               工作台
             </Link>
           </div>
@@ -273,12 +273,13 @@ export default function DraftEditorPage() {
               <span>{lastSavedAt ? formatTime(lastSavedAt) : "尚未保存"}</span>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button">
+              {/* <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button"> 
                 预览
               </button>
               <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button">
                 定时发布
               </button>
+                */}
               <button
                 className="rounded-md bg-[#ff4d4f] px-6 py-2.5 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
                 disabled={!draft || status === "saving" || !dirty}

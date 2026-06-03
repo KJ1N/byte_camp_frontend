@@ -78,7 +78,8 @@ packages/shared
 
 ```text
 apps/web/src/app
-├── page.tsx                 # 工作台首页
+├── page.tsx                 # 内容首页/推荐流入口
+├── workspace/page.tsx       # 创作工作台
 ├── login/page.tsx           # 登录
 ├── drafts/page.tsx          # 我的草稿
 ├── drafts/[id]/page.tsx     # 编辑器
@@ -91,11 +92,40 @@ apps/web/src/app
 ### 5.2 前端职责
 
 - 表单输入、编辑器交互、状态反馈。
+- 首页负责内容信息流、热点/爆文入口和用户菜单；工作台入口通过右上角用户名称 hover 菜单进入。
+- 用户菜单负责跳转工作台、草稿箱和退出登录，退出登录仅清理前端 token 和用户缓存。
 - 使用 TipTap 生成 ProseMirror JSON。
 - 通过 API 获取 AI 生成结果、审核结果和榜单数据。
 - 草稿自动保存时做 debounce。
 - 断网时缓存未同步内容，恢复网络后重放保存请求。
 - 页面性能优化：SSR/SSG、图片懒加载、虚拟滚动或分页、避免首屏大包。
+
+当前 MVP 前端业务链路：
+
+```text
+内容首页 `/`
+  -> 登录 `/login`
+  -> 用户名称 hover 菜单
+      -> 工作台 `/workspace`
+          -> POST /ai/generate-article
+          -> POST /drafts
+          -> 草稿编辑 `/drafts/:id`
+              -> PATCH /drafts/:id
+              -> GET /drafts/:id/versions
+      -> 草稿箱 `/drafts`
+      -> 退出登录
+```
+
+不同路由需要呈现不同网页标题，便于演示和浏览器标签识别：
+
+| 路由 | 网页标题 |
+| --- | --- |
+| `/` | 内容首页 - AI Creator Hub |
+| `/workspace` | 创作工作台 - AI Creator Hub |
+| `/drafts` | 草稿箱 - AI Creator Hub |
+| `/drafts/:id` | 草稿编辑 - AI Creator Hub |
+| `/login` | 登录 - AI Creator Hub |
+| `/docs` | 项目文档 - AI Creator Hub |
 
 ### 5.3 样式策略
 
