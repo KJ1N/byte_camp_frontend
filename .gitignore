@@ -71,6 +71,7 @@ next-env.d.ts
 # Local source materials and scratch reads
 *.pdf
 .repo-read-*/
+docs/learn/
 
 # OS/editor
 .DS_Store
