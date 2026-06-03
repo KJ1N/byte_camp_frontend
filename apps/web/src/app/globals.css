@@ -13,4 +13,9 @@
     background: #f7f8fb;
     color: #18202f;
   }
+
+  input[type="password"]::-ms-clear,
+  input[type="password"]::-ms-reveal {
+    display: none;
+  }
 }
