@@ -65,13 +65,13 @@ export default function DraftsPage() {
         <div className="mx-auto flex h-16 max-w-[1280px] items-center justify-between px-5">
           <div className="flex items-center gap-4">
             <Link
-              aria-label="返回工作台"
+              aria-label="返回首页"
               className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f5f5f5] text-xl text-[#7b8088] hover:bg-[#eeeeee]"
-              href="/workspace"
+              href="/"
             >
               ‹
             </Link>
-            <div>
+            <div className="absolute left-1/2 -translate-x-1/2 text-center">
               <div className="text-lg font-semibold">我的草稿</div>
               <div className="text-xs text-[#8f959e]">草稿、版本和编辑入口</div>
             </div>

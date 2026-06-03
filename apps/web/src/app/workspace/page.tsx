@@ -148,7 +148,7 @@ export default function WorkspacePage() {
             >
               ‹
             </Link>
-            <div>
+            <div className="absolute left-1/2 -translate-x-1/2 text-center">
               <div className="text-lg font-semibold">发布文章</div>
               <div className="text-xs text-[#8f959e]">AI Creator Hub 工作台</div>
             </div>
