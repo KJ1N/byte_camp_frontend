@@ -21,6 +21,72 @@ export enum AuditDecision {
   Block = "BLOCK",
 }
 
+export interface RichTextMark {
+  type: string;
+  attrs?: Record<string, unknown>;
+}
+
+export interface RichTextNode {
+  type: string;
+  text?: string;
+  attrs?: Record<string, unknown>;
+  marks?: RichTextMark[];
+  content?: RichTextNode[];
+}
+
+export interface RichTextDocument {
+  type: "doc";
+  content: RichTextNode[];
+}
+
+export interface GenerateArticleInput {
+  topic: string;
+  audience: string;
+  style: string;
+}
+
+export interface GeneratedArticleDraft {
+  model: string;
+  title: string;
+  outline: string[];
+  bodyText: string;
+  body: RichTextDocument;
+}
+
+export interface CreateDraftInput {
+  title: string;
+  body: RichTextDocument;
+  mode?: DraftMode;
+}
+
+export interface UpdateDraftInput {
+  title?: string;
+  body?: RichTextDocument;
+}
+
+export interface DraftSummary {
+  id: string;
+  title: string;
+  status: DraftStatus;
+  mode: DraftMode;
+  version: number;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export interface DraftDetail extends DraftSummary {
+  body: RichTextDocument;
+}
+
+export interface DraftVersionSummary {
+  id: string;
+  draftId: string;
+  title: string;
+  snapshot: RichTextDocument;
+  version: number;
+  createdAt: string;
+}
+
 export enum RiskCategory {
   Adult = "ADULT",
   Gambling = "GAMBLING",
@@ -65,4 +131,3 @@ export const rankingWeights = {
   freshnessScore: 0.15,
   feedbackScore: 0.05,
 } as const;
-

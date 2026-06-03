@@ -22,3 +22,17 @@ export async function apiFetch(path: string, init?: ApiFetchInit) {
     headers,
   });
 }
+
+export async function readApiJson<T>(response: Response): Promise<T | null> {
+  return response.json().catch(() => null) as Promise<T | null>;
+}
+
+export function getApiErrorMessage(payload: unknown, fallback: string) {
+  if (payload && typeof payload === "object" && "message" in payload) {
+    const message = (payload as { message?: string | string[] }).message;
+    if (Array.isArray(message)) return message.join("；");
+    if (message) return message;
+  }
+
+  return fallback;
+}
