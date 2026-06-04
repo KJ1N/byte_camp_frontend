@@ -123,21 +123,27 @@ pnpm prisma:seed
 pnpm dev
 ```
 
-如果前后端端口冲突，建议使用：
+`pnpm dev` 会先检测本机端口，再自动启动：
 
-```bash
-# API
-PORT=3001 pnpm --filter @bytecamp-aigc/api start:dev
-
-# Web
-NEXT_PUBLIC_API_BASE_URL=http://localhost:3001 pnpm --filter @bytecamp-aigc/web dev
+```text
+Web: 默认优先 http://localhost:3200
+API: 默认优先 http://localhost:3201
 ```
 
-Windows PowerShell:
+如果端口被占用，或 Windows 因 Docker / WSL2 / Hyper-V / VPN 把某些端口放入 excluded port range，脚本会自动尝试下一个可用端口，并把 `NEXT_PUBLIC_API_BASE_URL` 注入到 Web 进程。
+
+如需手动指定端口，使用：
 
 ```powershell
-$env:PORT="3001"; pnpm --filter @bytecamp-aigc/api start:dev
-$env:NEXT_PUBLIC_API_BASE_URL="http://localhost:3001"; pnpm --filter @bytecamp-aigc/web dev
+$env:WEB_PORT="3200"
+$env:API_PORT="3201"
+pnpm dev
+```
+
+如果需要绕过自动端口脚本，使用原始 workspace 并行启动：
+
+```bash
+pnpm dev:raw
 ```
 
 ## 文档

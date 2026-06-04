@@ -11,9 +11,11 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm -r --parallel dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:raw": "pnpm -r --parallel dev",
     "lint": "pnpm -r --parallel lint",
     "test": "pnpm -r --parallel test",
+    "test:dev-script": "node --test scripts/dev.test.mjs",
     "typecheck": "pnpm -r typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
