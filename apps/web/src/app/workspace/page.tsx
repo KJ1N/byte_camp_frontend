@@ -152,7 +152,7 @@ export default function WorkspacePage() {
             <Link
               aria-label="返回首页"
               className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f5f5f5] text-xl text-[#7b8088] hover:bg-[#eeeeee]"
-              href="/"
+              href="/creator"
             >
               ‹
             </Link>
@@ -168,7 +168,7 @@ export default function WorkspacePage() {
             </Link>
             <span className="hidden sm:block">消息</span>
             {user ? (
-              <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]" href="/drafts">
+              <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]" href="/creator">
                 {user.nickname}
               </Link>
             ) : (

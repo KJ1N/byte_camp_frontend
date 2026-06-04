@@ -67,7 +67,7 @@ export default function DraftsPage() {
             <Link
               aria-label="返回首页"
               className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f5f5f5] text-xl text-[#7b8088] hover:bg-[#eeeeee]"
-              href="/"
+              href="/creator"
             >
               ‹
             </Link>
