@@ -53,6 +53,18 @@ export interface GeneratedArticleDraft {
   body: RichTextDocument;
 }
 
+export interface CreatorInspiration {
+  id: string;
+  topic: string;
+  reason: string;
+  category: string;
+}
+
+export interface CreatorInspirationsResponse {
+  model: string;
+  items: CreatorInspiration[];
+}
+
 export interface CreateDraftInput {
   title: string;
   body: RichTextDocument;

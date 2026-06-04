@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Post, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Post, UseGuards } from "@nestjs/common";
 import type { GenerateArticleInput } from "@bytecamp-aigc/shared";
 import { JwtAuthGuard } from "../auth/auth.guard";
 import { AiGatewayService } from "./ai-gateway.service";
@@ -19,5 +19,10 @@ export class AiGatewayController {
     }
 
     return this.aiGatewayService.generateArticleDraft({ topic, audience, style });
+  }
+
+  @Get("creator-inspirations")
+  getCreatorInspirations() {
+    return this.aiGatewayService.generateCreatorInspirations();
   }
 }

@@ -1,6 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import type { GeneratedArticleDraft, GenerateArticleInput, RichTextDocument } from "@bytecamp-aigc/shared";
+import type {
+  CreatorInspirationsResponse,
+  GeneratedArticleDraft,
+  GenerateArticleInput,
+  RichTextDocument,
+} from "@bytecamp-aigc/shared";
 
 @Injectable()
 export class AiGatewayService {
@@ -27,6 +32,46 @@ export class AiGatewayService {
       outline,
       bodyText,
       body,
+    };
+  }
+
+  async generateCreatorInspirations(): Promise<CreatorInspirationsResponse> {
+    const model = this.config.get<string>("AI_MODEL") ?? "mock-model";
+
+    return {
+      model,
+      items: [
+        {
+          id: "inspiration-1",
+          topic: "普通人如何用 AI 建立稳定的写作流程",
+          reason: "适合从效率、步骤和工具边界展开，能直接转成方法型图文。",
+          category: "AI 创作",
+        },
+        {
+          id: "inspiration-2",
+          topic: "为什么优质内容需要先写大纲再写正文",
+          reason: "贴合新手创作者痛点，也能自然引出 AI 辅助生成大纲的价值。",
+          category: "写作方法",
+        },
+        {
+          id: "inspiration-3",
+          topic: "一篇图文发布前应该检查哪些风险",
+          reason: "能连接平台审核、事实表达、敏感信息和发布前自查流程。",
+          category: "内容安全",
+        },
+        {
+          id: "inspiration-4",
+          topic: "如何把零散灵感整理成可发布的长图文",
+          reason: "适合演示从主题到标题、大纲、正文、草稿保存的完整闭环。",
+          category: "创作流程",
+        },
+        {
+          id: "inspiration-5",
+          topic: "AI 生成内容为什么仍然需要人工编辑",
+          reason: "容易形成观点型文章，强调创作者判断、取舍和最终表达。",
+          category: "人机协作",
+        },
+      ],
     };
   }
 

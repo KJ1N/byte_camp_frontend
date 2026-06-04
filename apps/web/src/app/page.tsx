@@ -73,12 +73,12 @@ export default function ContentHomePage() {
           <div className="flex items-center gap-4 text-sm">
             {user ? (
               <div className="group relative">
-                <button
+                <Link
                   className="rounded-md bg-[#f6f7f9] px-4 py-2 font-semibold text-[#1f2329] hover:bg-[#eeeeee]"
-                  type="button"
+                  href="/creator"
                 >
                   {user.nickname}
-                </button>
+                </Link>
                 <div className="invisible absolute right-0 top-full z-30 w-40 pt-2 opacity-0 transition group-hover:visible group-hover:opacity-100">
                   <div className="rounded-md border border-[#eeeeee] bg-white py-2 shadow-[0_12px_36px_rgba(31,35,41,0.12)]">
                     <Link className="block px-4 py-2 text-[#4e5661] hover:bg-[#fff1f1] hover:text-[#ff4d4f]" href="/workspace">

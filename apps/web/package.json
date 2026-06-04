@@ -7,7 +7,7 @@
     "dev": "next dev",
     "start": "next start",
     "lint": "next typegen && tsc --noEmit -p tsconfig.json",
-    "test": "echo \"Web tests will be added with Vitest/Playwright\"",
+    "test": "node --test --experimental-strip-types --no-warnings src/**/*.test.ts",
     "typecheck": "next typegen && tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

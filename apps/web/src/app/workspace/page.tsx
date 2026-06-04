@@ -7,8 +7,10 @@ import type { DraftSummary, GeneratedArticleDraft, RichTextDocument } from "@byt
 
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
+import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
 
 const styleOptions = ["科普", "新闻", "轻松", "严肃", "种草"];
+const defaultTopic = "AI 如何改变内容创作";
 
 const emptyDoc: RichTextDocument = {
   type: "doc",
@@ -26,7 +28,7 @@ export default function WorkspacePage() {
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [topic, setTopic] = useState("AI 如何改变内容创作");
+  const [topic, setTopic] = useState(defaultTopic);
   const [audience, setAudience] = useState("内容创作者");
   const [style, setStyle] = useState("科普");
   const [generated, setGenerated] = useState<GeneratedArticleDraft | null>(null);
@@ -37,6 +39,12 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     const storedToken = getStoredToken();
+    const queryTopic = normalizeWorkspaceTopic(new URLSearchParams(window.location.search).get("topic"));
+
+    if (queryTopic) {
+      setTopic(queryTopic);
+    }
+
     setToken(storedToken);
     setUser(getStoredUser());
     setStatus("idle");

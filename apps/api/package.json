@@ -9,7 +9,7 @@
     "start:dev": "pnpm --filter @bytecamp-aigc/shared build && nest start --watch",
     "start:prod": "node dist/main.js",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "echo \"API tests will be added with Jest/Supertest\"",
+    "test": "node --test -r ts-node/register src/**/*.spec.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
