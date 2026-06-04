@@ -55,6 +55,7 @@ export default function DraftEditorPage() {
   const [hasRecovery, setHasRecovery] = useState(false);
 
   const wordCount = useMemo(() => textFromDoc(body).length, [body]);
+  const canPublish = Boolean(draft && !dirty && status !== "saving" && status !== "loading");
 
   useEffect(() => {
     const storedToken = getStoredToken();
@@ -273,13 +274,23 @@ export default function DraftEditorPage() {
               <span>{lastSavedAt ? formatTime(lastSavedAt) : "尚未保存"}</span>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              {/* <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button"> 
-                预览
-              </button>
-              <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button">
-                定时发布
-              </button>
-                */}
+              {canPublish ? (
+                <Link
+                  className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661] hover:border-[#ffb2b3] hover:text-[#ff4d4f]"
+                  href={`/publish/${draft?.id}`}
+                >
+                  预览并发布
+                </Link>
+              ) : (
+                <button
+                  className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#a8adb5]"
+                  disabled
+                  title="请先保存草稿，再进入发布审核"
+                  type="button"
+                >
+                  预览并发布
+                </button>
+              )}
               <button
                 className="rounded-md bg-[#ff4d4f] px-6 py-2.5 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
                 disabled={!draft || status === "saving" || !dirty}

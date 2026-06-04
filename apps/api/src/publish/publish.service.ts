@@ -1,0 +1,289 @@
+import { Injectable, NotFoundException } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
+import {
+  ArticleStatus,
+  AuditDecision,
+  DraftStatus,
+  richTextToPlainText,
+  type AuditCheckResponse,
+  type ArticleDetail,
+  type AuditResult,
+  type PublishArticleResponse,
+  type QualityScore,
+  type RichTextDocument,
+  type ScoringArticleResponse,
+} from "@bytecamp-aigc/shared";
+import { AuditService } from "../audit/audit.service";
+import { PrismaService } from "../prisma/prisma.service";
+import { ScoringService } from "../scoring/scoring.service";
+
+@Injectable()
+export class PublishService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditService: AuditService,
+    private readonly scoringService: ScoringService,
+  ) {}
+
+  async checkDraft(authorId: string, draftId: string): Promise<AuditCheckResponse> {
+    return this.prisma.$transaction(async (tx) => {
+      const { draft, text } = await this.loadDraftText(tx, authorId, draftId);
+      const result = await this.auditService.checkText(`${draft.title}\n${text}`);
+      return this.createAuditRecord(tx, draft.id, result);
+    });
+  }
+
+  async scoreDraft(authorId: string, draftId: string): Promise<ScoringArticleResponse> {
+    return this.prisma.$transaction(async (tx) => {
+      const { draft, text } = await this.loadDraftText(tx, authorId, draftId);
+      const result = this.scoringService.scoreArticle({
+        title: draft.title,
+        text,
+      });
+
+      return this.createQualityScore(tx, draft.id, result);
+    });
+  }
+
+  async getPublishedArticle(id: string): Promise<ArticleDetail> {
+    const article = await this.prisma.article.findFirst({
+      where: { id, status: ArticleStatus.Published },
+      include: {
+        author: { select: { id: true, nickname: true } },
+        auditRecords: { orderBy: { createdAt: "desc" }, take: 1 },
+        scores: { orderBy: { createdAt: "desc" }, take: 1 },
+      },
+    });
+
+    if (!article) throw new NotFoundException("Article not found");
+
+    const latestAuditRecord =
+      article.auditRecords[0] ??
+      (await this.prisma.auditRecord.findFirst({
+        where: { draftId: article.draftId },
+        orderBy: { createdAt: "desc" },
+      }));
+    const latestScoreRecord =
+      article.scores[0] ??
+      (await this.prisma.qualityScore.findFirst({
+        where: { draftId: article.draftId },
+        orderBy: { createdAt: "desc" },
+      }));
+
+    return {
+      id: article.id,
+      draftId: article.draftId,
+      title: article.title,
+      body: article.body as unknown as RichTextDocument,
+      summary: article.summary,
+      status: article.status as ArticleStatus,
+      author: article.author,
+      publishedAt: article.publishedAt.toISOString(),
+      updatedAt: article.updatedAt.toISOString(),
+      latestAudit: latestAuditRecord
+        ? {
+            recordId: latestAuditRecord.id,
+            result: latestAuditRecord.rawResult as unknown as AuditResult,
+            createdAt: latestAuditRecord.createdAt.toISOString(),
+          }
+        : undefined,
+      latestScore: latestScoreRecord
+        ? {
+            scoreId: latestScoreRecord.id,
+            contentValue: latestScoreRecord.contentValue,
+            expressionQuality: latestScoreRecord.expressionQuality,
+            readerExperience: latestScoreRecord.readerExperience,
+            spreadPotential: latestScoreRecord.spreadPotential,
+            safetyScore: latestScoreRecord.safetyScore,
+            overall: latestScoreRecord.overall,
+            reasons: this.asStringArray(latestScoreRecord.reasons),
+            suggestions: this.asStringArray(latestScoreRecord.suggestions),
+            createdAt: latestScoreRecord.createdAt.toISOString(),
+          }
+        : undefined,
+    };
+  }
+
+  async publishDraft(authorId: string, draftId: string): Promise<PublishArticleResponse> {
+    return this.prisma.$transaction(async (tx) => {
+      const { draft, body, text } = await this.loadDraftText(tx, authorId, draftId);
+      const auditResult = await this.auditService.checkText(`${draft.title}\n${text}`);
+      const scoreResult = this.scoringService.scoreArticle({
+        title: draft.title,
+        text,
+        safetyScore: this.safetyScoreFor(auditResult.decision),
+      });
+
+      const audit = await this.createAuditRecord(tx, draft.id, auditResult);
+      const score = await this.createQualityScore(tx, draft.id, scoreResult);
+
+      if (auditResult.decision === AuditDecision.Block) {
+        return {
+          status: "BLOCKED",
+          audit,
+          score,
+          message: "内容命中高风险规则，已阻止发布。",
+        };
+      }
+
+      if (auditResult.decision === AuditDecision.Warn) {
+        return {
+          status: "NEEDS_REVISION",
+          audit,
+          score,
+          message: "内容需要修改后重新审核。",
+        };
+      }
+
+      const existingArticle = await tx.article.findFirst({
+        where: { draftId: draft.id, status: ArticleStatus.Published },
+        select: { id: true },
+      });
+
+      if (existingArticle) {
+        return {
+          articleId: existingArticle.id,
+          status: "PUBLISHED",
+          audit,
+          score,
+          message: "草稿已发布，返回已有文章。",
+        };
+      }
+
+      const article = await tx.article.create({
+        data: {
+          authorId,
+          draftId: draft.id,
+          title: draft.title,
+          body: body as unknown as Prisma.InputJsonValue,
+          summary: this.createSummary(text),
+        },
+      });
+
+      await tx.articleRevision.create({
+        data: {
+          articleId: article.id,
+          title: draft.title,
+          body: body as unknown as Prisma.InputJsonValue,
+          reason: "初次发布",
+        },
+      });
+
+      await this.linkPublishRecordsToArticle(tx, {
+        articleId: article.id,
+        auditRecordId: audit.recordId,
+        scoreId: score.scoreId,
+      });
+
+      await tx.draft.update({
+        where: { id: draft.id },
+        data: { status: DraftStatus.Published },
+      });
+
+      return {
+        articleId: article.id,
+        status: "PUBLISHED",
+        audit,
+        score,
+        message: "文章发布成功。",
+      };
+    });
+  }
+
+  private async loadDraftText(tx: Prisma.TransactionClient, authorId: string, draftId: string) {
+    const draft = await tx.draft.findFirst({
+      where: { id: draftId, authorId },
+    });
+
+    if (!draft) throw new NotFoundException("Draft not found");
+
+    const body = draft.body as unknown as RichTextDocument;
+    return {
+      draft,
+      body,
+      text: richTextToPlainText(body),
+    };
+  }
+
+  private async createAuditRecord(
+    tx: Prisma.TransactionClient,
+    draftId: string,
+    result: AuditResult,
+  ): Promise<AuditCheckResponse> {
+    const record = await tx.auditRecord.create({
+      data: {
+        draftId,
+        stage: "PUBLISH_PRECHECK",
+        decision: result.decision,
+        riskLevel: result.riskLevel,
+        categories: result.categories,
+        evidence: result.evidence as unknown as Prisma.InputJsonValue,
+        suggestions: result.rewriteSuggestions as unknown as Prisma.InputJsonValue,
+        rawResult: result as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return {
+      recordId: record.id,
+      result,
+      createdAt: record.createdAt.toISOString(),
+    };
+  }
+
+  private async createQualityScore(
+    tx: Prisma.TransactionClient,
+    draftId: string,
+    result: QualityScore,
+  ): Promise<ScoringArticleResponse> {
+    const score = await tx.qualityScore.create({
+      data: {
+        draftId,
+        contentValue: result.contentValue,
+        expressionQuality: result.expressionQuality,
+        readerExperience: result.readerExperience,
+        spreadPotential: result.spreadPotential,
+        safetyScore: result.safetyScore,
+        overall: result.overall,
+        reasons: result.reasons as unknown as Prisma.InputJsonValue,
+        suggestions: result.suggestions as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return {
+      ...result,
+      scoreId: score.id,
+      createdAt: score.createdAt.toISOString(),
+    };
+  }
+
+  private async linkPublishRecordsToArticle(
+    tx: Prisma.TransactionClient,
+    input: { articleId: string; auditRecordId: string; scoreId: string },
+  ) {
+    await tx.auditRecord.update({
+      where: { id: input.auditRecordId },
+      data: { articleId: input.articleId },
+    });
+
+    await tx.qualityScore.update({
+      where: { id: input.scoreId },
+      data: { articleId: input.articleId },
+    });
+  }
+
+  private safetyScoreFor(decision: AuditDecision) {
+    if (decision === AuditDecision.Block) return 20;
+    if (decision === AuditDecision.Warn) return 65;
+    return 95;
+  }
+
+  private createSummary(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return "暂无摘要";
+    return trimmed.length > 120 ? `${trimmed.slice(0, 120)}...` : trimmed;
+  }
+
+  private asStringArray(value: unknown) {
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  }
+}
