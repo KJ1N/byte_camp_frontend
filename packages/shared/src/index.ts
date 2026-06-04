@@ -21,6 +21,11 @@ export enum AuditDecision {
   Block = "BLOCK",
 }
 
+export enum ArticleStatus {
+  Published = "PUBLISHED",
+  Withdrawn = "WITHDRAWN",
+}
+
 export interface RichTextMark {
   type: string;
   attrs?: Record<string, unknown>;
@@ -37,6 +42,29 @@ export interface RichTextNode {
 export interface RichTextDocument {
   type: "doc";
   content: RichTextNode[];
+}
+
+const lineNodeTypes = new Set(["paragraph", "heading"]);
+
+export function richTextToPlainText(doc: RichTextDocument): string {
+  return doc.content
+    .flatMap((node) => richTextNodeToLines(node))
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function richTextNodeToLines(node: RichTextNode): string[] {
+  if (node.text) return [node.text];
+
+  const childLines = (node.content ?? []).flatMap((child) => richTextNodeToLines(child));
+
+  if (lineNodeTypes.has(node.type)) {
+    const line = childLines.join("").trim();
+    return line ? [line] : [];
+  }
+
+  return childLines;
 }
 
 export interface GenerateArticleInput {
@@ -127,6 +155,50 @@ export interface AuditResult {
   evidence: Array<{ text: string; reason: string }>;
   rewriteSuggestions: string[];
   summary: string;
+}
+
+export interface AuditCheckInput {
+  draftId: string;
+}
+
+export interface AuditCheckResponse {
+  recordId: string;
+  result: AuditResult;
+  createdAt: string;
+}
+
+export interface ScoringArticleInput {
+  draftId: string;
+}
+
+export interface ScoringArticleResponse extends QualityScore {
+  scoreId: string;
+  createdAt: string;
+}
+
+export interface PublishArticleResponse {
+  articleId?: string;
+  status: "PUBLISHED" | "BLOCKED" | "NEEDS_REVISION";
+  audit: AuditCheckResponse;
+  score: ScoringArticleResponse;
+  message: string;
+}
+
+export interface ArticleDetail {
+  id: string;
+  draftId: string;
+  title: string;
+  body: RichTextDocument;
+  summary: string;
+  status: ArticleStatus;
+  author: {
+    id: string;
+    nickname: string;
+  };
+  publishedAt: string;
+  updatedAt: string;
+  latestAudit?: AuditCheckResponse;
+  latestScore?: ScoringArticleResponse;
 }
 
 export const qualityWeights = {
