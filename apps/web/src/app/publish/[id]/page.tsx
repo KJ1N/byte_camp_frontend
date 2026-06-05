@@ -291,7 +291,7 @@ export default function PublishConfirmPage() {
             ) : (
               <>
                 <button
-                  className="rounded-md border border-[#dedede] px-5 py-3 text-sm font-semibold text-[#4e5661] disabled:text-[#a8adb5]"
+                  className="rounded-md border border-[#dedede] px-5 py-3 text-sm font-semibold text-[#4e5661] disabled:text-[#a8adb5] cursor-pointer disabled:cursor-not-allowed"
                   disabled={!draft || isChecking || isPublishing}
                   type="button"
                   onClick={() => void startReview()}
@@ -299,7 +299,7 @@ export default function PublishConfirmPage() {
                   {isChecking ? "审核评分中..." : "开始审核"}
                 </button>
                 <button
-                  className="rounded-md bg-[#ff4d4f] px-5 py-3 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
+                  className="rounded-md bg-[#ff4d4f] px-5 py-3 text-sm font-semibold text-white disabled:bg-[#f3a5a6] cursor-pointer disabled:cursor-not-allowed"
                   disabled={!canPublish || isPublishing}
                   type="button"
                   onClick={() => void publishDraft()}
