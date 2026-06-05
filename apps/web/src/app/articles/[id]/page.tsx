@@ -2,10 +2,23 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import type { ArticleDetail, RichTextDocument, RichTextNode } from "@bytecamp-aigc/shared";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  EngagementEventType,
+  type ArticleDetail,
+  type ArticleEngagementStats,
+  type CreateEngagementEventResponse,
+  type RichTextDocument,
+  type RichTextNode,
+} from "@bytecamp-aigc/shared";
 
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
+import {
+  consumeArticleViewIntent,
+  hasRecordedEngagement,
+  markEngagementRecorded,
+  shouldRecordArticleView,
+} from "@/lib/engagement-state";
 
 function textFromNode(node: RichTextNode): string {
   return [node.text ?? "", ...(node.content ?? []).map((child) => textFromNode(child))].join("");
@@ -28,8 +41,14 @@ function formatTime(value: string) {
 export default function ArticleDetailPage() {
   const params = useParams<{ id: string }>();
   const [article, setArticle] = useState<ArticleDetail | null>(null);
+  const [engagement, setEngagement] = useState<ArticleEngagementStats>({ views: 0, likes: 0, favorites: 0 });
   const [error, setError] = useState("");
+  const [eventError, setEventError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [liked, setLiked] = useState(false);
+  const [favorited, setFavorited] = useState(false);
+  const [pendingEvent, setPendingEvent] = useState<EngagementEventType | null>(null);
+  const viewedArticleIdRef = useRef<string | null>(null);
 
   const paragraphs = useMemo(() => (article ? linesFromDoc(article.body) : []), [article]);
 
@@ -51,7 +70,56 @@ export default function ArticleDetailPage() {
     }
 
     setArticle(payload as ArticleDetail);
+    setEngagement((payload as ArticleDetail).engagement ?? { views: 0, likes: 0, favorites: 0 });
+    setLiked(hasRecordedEngagement(window.localStorage, params.id, EngagementEventType.Like));
+    setFavorited(hasRecordedEngagement(window.localStorage, params.id, EngagementEventType.Favorite));
     setLoading(false);
+
+    if (
+      shouldRecordArticleView(viewedArticleIdRef.current, params.id) &&
+      consumeArticleViewIntent(window.sessionStorage, params.id)
+    ) {
+      viewedArticleIdRef.current = params.id;
+      void recordEngagement(EngagementEventType.View);
+    }
+  }
+
+  async function recordEngagement(type: EngagementEventType) {
+    setEventError("");
+    setPendingEvent(type);
+
+    const response = await apiFetch(`/articles/${params.id}/events`, {
+      method: "POST",
+      body: JSON.stringify({
+        type,
+        userKey: getBrowserUserKey(),
+      }),
+    });
+    const payload = await readApiJson<CreateEngagementEventResponse | { message?: string | string[] }>(response);
+
+    setPendingEvent(null);
+
+    if (!response.ok || !payload || "message" in payload) {
+      if (type !== EngagementEventType.View) {
+        setEventError(getApiErrorMessage(payload, "互动记录失败，请稍后重试。"));
+      }
+      return false;
+    }
+
+    setEngagement((payload as CreateEngagementEventResponse).stats);
+    return true;
+  }
+
+  async function togglePositiveEvent(type: EngagementEventType.Like | EngagementEventType.Favorite) {
+    if (hasRecordedEngagement(window.localStorage, params.id, type)) return;
+
+    const recorded = await recordEngagement(type);
+    if (!recorded) return;
+
+    markEngagementRecorded(window.localStorage, params.id, type);
+
+    if (type === EngagementEventType.Like) setLiked(true);
+    if (type === EngagementEventType.Favorite) setFavorited(true);
   }
 
   return (
@@ -69,6 +137,13 @@ export default function ArticleDetailPage() {
 
       <div className="mx-auto grid max-w-[1180px] gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <article className="min-h-[calc(100vh-8rem)] bg-white px-8 py-10">
+          <Link
+              aria-label="返回首页"
+              className="mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-[#f5f5f5] text-xl text-[#7b8088] hover:bg-[#eeeeee]"
+              href="/"
+            >
+              ‹
+            </Link>
           {loading ? (
             <div className="py-16 text-center text-sm text-[#8f959e]">文章加载中...</div>
           ) : error ? (
@@ -92,8 +167,45 @@ export default function ArticleDetailPage() {
         </article>
 
         <aside className="h-fit bg-white px-5 py-6 lg:sticky lg:top-20">
-          <h2 className="mb-4 text-base font-semibold">发布记录</h2>
+          <h2 className="mb-4 text-base font-semibold">分发反馈</h2>
           <div className="grid gap-3 text-sm text-[#4e5661]">
+            <div className="grid grid-cols-3 gap-2 rounded-md bg-[#f8f9fb] p-4 text-center">
+              <Metric label="阅读" value={engagement.views} />
+              <Metric label="点赞" value={engagement.likes} />
+              <Metric label="收藏" value={engagement.favorites} />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                className="rounded-md bg-[#ff4d4f] px-4 py-3 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
+                disabled={liked || pendingEvent === EngagementEventType.Like}
+                type="button"
+                onClick={() => void togglePositiveEvent(EngagementEventType.Like)}
+              >
+                {liked ? "已点赞" : pendingEvent === EngagementEventType.Like ? "点赞中..." : "点赞"}
+              </button>
+              <button
+                className="rounded-md border border-[#dedede] px-4 py-3 text-sm font-semibold text-[#4e5661] hover:bg-[#f8f8f8] disabled:text-[#a8adb5]"
+                disabled={favorited || pendingEvent === EngagementEventType.Favorite}
+                type="button"
+                onClick={() => void togglePositiveEvent(EngagementEventType.Favorite)}
+              >
+                {favorited ? "已收藏" : pendingEvent === EngagementEventType.Favorite ? "收藏中..." : "收藏"}
+              </button>
+            </div>
+            {eventError ? (
+              <div className="rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-4 py-3 text-sm text-[#d92d2d]">
+                {eventError}
+              </div>
+            ) : null}
+            <div className="rounded-md bg-[#f8f9fb] p-4">
+              <div className="text-xs text-[#8f959e]">排序解释</div>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <span>热度分：{article?.ranking?.hotScore ?? "--"}</span>
+                <span>新鲜度：{article?.ranking?.freshnessScore ?? "--"}</span>
+                <span>反馈分：{article?.ranking?.feedbackScore ?? "--"}</span>
+                <span>综合分：{article?.ranking?.rankScore ?? "--"}</span>
+              </div>
+            </div>
             <div className="rounded-md bg-[#f8f9fb] p-4">
               <div className="text-xs text-[#8f959e]">审核摘要</div>
               <div className="mt-2">{article?.latestAudit?.result.summary ?? "暂无审核记录"}</div>
@@ -119,3 +231,26 @@ export default function ArticleDetailPage() {
   );
 }
 
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="text-xs text-[#8f959e]">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-[#1f2329]">{value}</div>
+    </div>
+  );
+}
+
+function getBrowserUserKey() {
+  const key = "aigc_creator_browser_key";
+
+  try {
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+
+    const created = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    window.localStorage.setItem(key, created);
+    return created;
+  } catch {
+    return "anonymous-browser";
+  }
+}

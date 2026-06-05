@@ -199,6 +199,8 @@ export interface ArticleDetail {
   updatedAt: string;
   latestAudit?: AuditCheckResponse;
   latestScore?: ScoringArticleResponse;
+  engagement?: ArticleEngagementStats;
+  ranking?: RankingScoreBreakdown;
 }
 
 export const qualityWeights = {
@@ -215,3 +217,53 @@ export const rankingWeights = {
   freshnessScore: 0.15,
   feedbackScore: 0.05,
 } as const;
+
+export enum EngagementEventType {
+  View = "VIEW",
+  Like = "LIKE",
+  Favorite = "FAVORITE",
+}
+
+export interface ArticleEngagementStats {
+  views: number;
+  likes: number;
+  favorites: number;
+}
+
+export interface RankingScoreBreakdown {
+  qualityScore: number;
+  hotScore: number;
+  freshnessScore: number;
+  feedbackScore: number;
+  rankScore: number;
+}
+
+export interface ArticleListItem {
+  id: string;
+  title: string;
+  summary: string;
+  author: {
+    id: string;
+    nickname: string;
+  };
+  publishedAt: string;
+  qualityScore: number;
+  engagement: ArticleEngagementStats;
+  ranking: RankingScoreBreakdown;
+}
+
+export interface CursorPageResponse<T> {
+  items: T[];
+  nextCursor?: string;
+}
+
+export interface CreateEngagementEventInput {
+  type: EngagementEventType;
+  userKey?: string;
+}
+
+export interface CreateEngagementEventResponse {
+  articleId: string;
+  type: EngagementEventType;
+  stats: ArticleEngagementStats;
+}

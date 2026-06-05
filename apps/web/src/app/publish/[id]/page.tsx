@@ -14,6 +14,7 @@ import type {
 
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
+import { markArticleViewIntent } from "@/lib/engagement-state";
 import { getPublishedArticleHref, isPublishArticleResponse, normalizePublishDraftId } from "@/lib/publish-result";
 
 function textFromNode(node: RichTextNode): string {
@@ -283,6 +284,7 @@ export default function PublishConfirmPage() {
               <Link
                 className="rounded-md bg-[#ff4d4f] px-5 py-3 text-center text-sm font-semibold text-white"
                 href={`/articles/${publishResult.articleId}`}
+                onClick={() => markArticleViewIntent(window.sessionStorage, publishResult.articleId!)}
               >
                 查看文章详情
               </Link>

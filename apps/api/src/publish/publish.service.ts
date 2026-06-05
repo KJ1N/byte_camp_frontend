@@ -4,9 +4,11 @@ import {
   ArticleStatus,
   AuditDecision,
   DraftStatus,
+  EngagementEventType,
   richTextToPlainText,
   type AuditCheckResponse,
   type ArticleDetail,
+  type ArticleEngagementStats,
   type AuditResult,
   type PublishArticleResponse,
   type QualityScore,
@@ -15,6 +17,7 @@ import {
 } from "@bytecamp-aigc/shared";
 import { AuditService } from "../audit/audit.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { RankingService } from "../ranking/ranking.service";
 import { ScoringService } from "../scoring/scoring.service";
 
 @Injectable()
@@ -23,6 +26,7 @@ export class PublishService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly scoringService: ScoringService,
+    private readonly rankingService: RankingService = new RankingService(),
   ) {}
 
   async checkDraft(authorId: string, draftId: string): Promise<AuditCheckResponse> {
@@ -52,6 +56,7 @@ export class PublishService {
         author: { select: { id: true, nickname: true } },
         auditRecords: { orderBy: { createdAt: "desc" }, take: 1 },
         scores: { orderBy: { createdAt: "desc" }, take: 1 },
+        events: { select: { type: true, value: true } },
       },
     });
 
@@ -69,6 +74,8 @@ export class PublishService {
         where: { draftId: article.draftId },
         orderBy: { createdAt: "desc" },
       }));
+    const engagement = this.statsFromEvents(article.events ?? []);
+    const qualityScore = latestScoreRecord?.overall ?? 0;
 
     return {
       id: article.id,
@@ -101,6 +108,14 @@ export class PublishService {
             createdAt: latestScoreRecord.createdAt.toISOString(),
           }
         : undefined,
+      engagement,
+      ranking: this.rankingService.calculateBreakdown({
+        qualityScore,
+        views: engagement.views,
+        likes: engagement.likes,
+        favorites: engagement.favorites,
+        publishedAt: article.publishedAt,
+      }),
     };
   }
 
@@ -139,14 +154,44 @@ export class PublishService {
         where: { draftId: draft.id, status: ArticleStatus.Published },
         select: { id: true },
       });
+      const summary = this.createSummary(text);
 
       if (existingArticle) {
+        await tx.article.update({
+          where: { id: existingArticle.id },
+          data: {
+            title: draft.title,
+            body: body as unknown as Prisma.InputJsonValue,
+            summary,
+          },
+        });
+
+        await tx.articleRevision.create({
+          data: {
+            articleId: existingArticle.id,
+            title: draft.title,
+            body: body as unknown as Prisma.InputJsonValue,
+            reason: "二次发布更新",
+          },
+        });
+
+        await this.linkPublishRecordsToArticle(tx, {
+          articleId: existingArticle.id,
+          auditRecordId: audit.recordId,
+          scoreId: score.scoreId,
+        });
+
+        await tx.draft.update({
+          where: { id: draft.id },
+          data: { status: DraftStatus.Published },
+        });
+
         return {
           articleId: existingArticle.id,
           status: "PUBLISHED",
           audit,
           score,
-          message: "草稿已发布，返回已有文章。",
+          message: "文章已更新并重新发布。",
         };
       }
 
@@ -156,7 +201,7 @@ export class PublishService {
           draftId: draft.id,
           title: draft.title,
           body: body as unknown as Prisma.InputJsonValue,
-          summary: this.createSummary(text),
+          summary,
         },
       });
 
@@ -285,5 +330,17 @@ export class PublishService {
 
   private asStringArray(value: unknown) {
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  }
+
+  private statsFromEvents(events: Array<{ type: string; value: number }>): ArticleEngagementStats {
+    return events.reduce<ArticleEngagementStats>(
+      (stats, event) => {
+        if (event.type === EngagementEventType.View) stats.views += event.value;
+        if (event.type === EngagementEventType.Like) stats.likes += event.value;
+        if (event.type === EngagementEventType.Favorite) stats.favorites += event.value;
+        return stats;
+      },
+      { views: 0, likes: 0, favorites: 0 },
+    );
   }
 }

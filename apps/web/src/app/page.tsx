@@ -2,51 +2,83 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import type { ArticleListItem, CursorPageResponse } from "@bytecamp-aigc/shared";
 
+import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredUser, type AuthUser } from "@/lib/auth";
+import { markArticleViewIntent } from "@/lib/engagement-state";
 
-const featuredArticles = [
-  {
-    id: "seed-1",
-    title: "AI 如何改变内容创作：从灵感到发布的完整链路",
-    summary: "从选题、初稿、编辑、审核到分发，AI 正在把创作者的工作流从单点生成推进到完整闭环。",
-    author: "训练营创作者",
-    score: 86,
-    reads: "1.2w",
-    tag: "AI 创作",
-  },
-  {
-    id: "seed-2",
-    title: "内容质量分为什么重要：让好文章进入榜单",
-    summary: "质量分、热度、时间衰减和互动反馈共同影响分发排序，也让内容运营有可解释依据。",
-    author: "内容运营",
-    score: 82,
-    reads: "8.4k",
-    tag: "质量评分",
-  },
-  {
-    id: "seed-3",
-    title: "发布前审核不是阻碍，而是创作者的安全网",
-    summary: "高危内容拦截、中低风险建议和可追溯记录，能帮助创作者更稳定地完成发布。",
-    author: "审核助手",
-    score: 79,
-    reads: "6.7k",
-    tag: "安全审核",
-  },
-];
+type PageState = "loading" | "ready" | "empty" | "error";
 
-const rankings = [
-  { title: "AI 写作从 prompt 到工作流", metric: "热度 98" },
-  { title: "图文创作者如何用 AI 做选题", metric: "热度 91" },
-  { title: "内容审核的三类风险信号", metric: "热度 87" },
-];
+function formatCount(value: number) {
+  if (value >= 10000) return `${(value / 10000).toFixed(1)}w`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(value);
+}
+
+function formatTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
 
 export default function ContentHomePage() {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [feed, setFeed] = useState<ArticleListItem[]>([]);
+  const [hotRankings, setHotRankings] = useState<ArticleListItem[]>([]);
+  const [topRankings, setTopRankings] = useState<ArticleListItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [state, setState] = useState<PageState>("loading");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     setUser(getStoredUser());
+    void loadHome();
   }, []);
+
+  async function loadHome() {
+    setState("loading");
+    setError("");
+
+    const [feedResult, hotResult, topResult] = await Promise.all([
+      requestArticlePage("/feed?limit=6"),
+      requestArticlePage("/rankings/hot?limit=5"),
+      requestArticlePage("/rankings/top?limit=5"),
+    ]);
+
+    if (!feedResult.ok || !hotResult.ok || !topResult.ok) {
+      setError(feedResult.error || hotResult.error || topResult.error || "首页内容加载失败，请稍后重试。");
+      setState("error");
+      return;
+    }
+
+    const feedItems = feedResult.data?.items ?? [];
+    setFeed(feedItems);
+    setHotRankings(hotResult.data?.items ?? []);
+    setTopRankings(topResult.data?.items ?? []);
+    setNextCursor(feedResult.data?.nextCursor);
+    setState(feedItems.length ? "ready" : "empty");
+  }
+
+  async function loadMore() {
+    if (!nextCursor || loadingMore) return;
+
+    setLoadingMore(true);
+    const result = await requestArticlePage(`/feed?limit=6&cursor=${encodeURIComponent(nextCursor)}`);
+    setLoadingMore(false);
+
+    if (!result.ok || !result.data) {
+      setError(result.error || "加载更多失败，请稍后重试。");
+      return;
+    }
+
+    setFeed((current) => [...current, ...result.data.items]);
+    setNextCursor(result.data.nextCursor);
+  }
 
   function logout() {
     clearAuthSession();
@@ -65,8 +97,8 @@ export default function ContentHomePage() {
             <a className="font-semibold text-[#1f2329]" href="#feed">
               推荐
             </a>
-            <a href="#rankings">热点榜</a>
-            <a href="#rankings">爆文榜</a>
+            <Link href="/rankings?tab=hot">热点榜</Link>
+            <Link href="/rankings?tab=top">爆文榜</Link>
             <Link href="/docs">文档</Link>
           </nav>
 
@@ -110,53 +142,59 @@ export default function ContentHomePage() {
         <div id="feed" className="bg-white">
           <div className="border-b border-[#eeeeee] px-6 py-6">
             <p className="text-sm font-semibold text-[#ff4d4f]">推荐内容</p>
-            <h1 className="mt-2 text-3xl font-semibold">发现值得发布和复盘的 AI 图文内容</h1>
+            <h1 className="mt-2 text-3xl font-semibold">发现正在被阅读和互动的 AI 图文内容</h1>
             <p className="mt-3 max-w-2xl text-sm leading-7 text-[#6b7280]">
-              首页保留为内容消费页，创作入口从右上角账号菜单进入，读者可以先浏览推荐、热点和爆文内容。
+              首页内容来自后端发布文章、质量评分和互动数据，读者侧浏览会继续反馈到榜单排序。
             </p>
           </div>
 
-          <div className="divide-y divide-[#eeeeee]">
-            {featuredArticles.map((article) => (
-              <article className="grid gap-5 px-6 py-6 transition hover:bg-[#fafafa] md:grid-cols-[minmax(0,1fr)_120px]" key={article.id}>
-                <div>
-                  <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
-                    <span className="rounded bg-[#fff1f1] px-2 py-1 font-semibold text-[#ff4d4f]">{article.tag}</span>
-                    <span className="text-[#8f959e]">{article.author}</span>
-                  </div>
-                  <h2 className="text-xl font-semibold leading-8">{article.title}</h2>
-                  <p className="mt-3 max-w-3xl text-sm leading-7 text-[#5d6673]">{article.summary}</p>
-                </div>
-                <div className="flex items-end justify-between gap-4 md:block md:text-right">
-                  <div>
-                    <div className="text-sm text-[#8f959e]">质量分</div>
-                    <div className="mt-1 text-2xl font-semibold text-[#1f2329]">{article.score}</div>
-                  </div>
-                  <div className="mt-4 text-sm text-[#8f959e]">{article.reads} 阅读</div>
-                </div>
-              </article>
-            ))}
-          </div>
+          {state === "loading" ? (
+            <div className="px-6 py-16 text-center text-sm text-[#8f959e]">推荐内容加载中...</div>
+          ) : state === "error" ? (
+            <div className="px-6 py-10">
+              <div className="rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-4 py-3 text-sm text-[#d92d2d]">
+                {error}
+              </div>
+              <button className="mt-4 rounded-md bg-[#ff4d4f] px-4 py-2 text-sm font-semibold text-white" type="button" onClick={() => void loadHome()}>
+                重试
+              </button>
+            </div>
+          ) : state === "empty" ? (
+            <div className="px-6 py-16 text-center">
+              <div className="text-base font-semibold">暂无已发布文章</div>
+              <p className="mt-3 text-sm text-[#8f959e]">从工作台完成创作、审核和发布后，文章会进入这里。</p>
+              <Link className="mt-5 inline-flex rounded-md bg-[#ff4d4f] px-4 py-2 text-sm font-semibold text-white" href="/workspace">
+                去创作
+              </Link>
+            </div>
+          ) : (
+            <>
+              <div className="divide-y divide-[#eeeeee]">
+                {feed.map((article) => (
+                  <ArticleRow article={article} key={article.id} />
+                ))}
+              </div>
+              <div className="border-t border-[#eeeeee] px-6 py-5 text-center">
+                {nextCursor ? (
+                  <button
+                    className="rounded-md border border-[#dedede] px-5 py-2 text-sm font-semibold text-[#4e5661] hover:bg-[#f8f8f8] disabled:text-[#a8adb5]"
+                    disabled={loadingMore}
+                    type="button"
+                    onClick={() => void loadMore()}
+                  >
+                    {loadingMore ? "加载中..." : "加载更多"}
+                  </button>
+                ) : (
+                  <span className="text-sm text-[#8f959e]">没有更多内容了</span>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <aside id="rankings" className="space-y-5">
-          <div className="bg-white px-5 py-5">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">热点榜</h2>
-              <span className="text-xs text-[#8f959e]">实时排序</span>
-            </div>
-            <div className="grid gap-3">
-              {rankings.map((item, index) => (
-                <div className="flex gap-3 rounded-md border border-[#eeeeee] px-3 py-3" key={item.title}>
-                  <span className="font-semibold text-[#ff4d4f]">{index + 1}</span>
-                  <div>
-                    <div className="text-sm font-semibold leading-6">{item.title}</div>
-                    <div className="mt-1 text-xs text-[#8f959e]">{item.metric}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <RankingPanel href="/rankings?tab=hot" items={hotRankings} title="热点榜" />
+          <RankingPanel href="/rankings?tab=top" items={topRankings} title="爆文榜" />
 
           <div className="bg-white px-5 py-5">
             <h2 className="text-lg font-semibold">创作者入口</h2>
@@ -170,5 +208,86 @@ export default function ContentHomePage() {
         </aside>
       </section>
     </main>
+  );
+}
+
+async function requestArticlePage(path: string) {
+  const response = await apiFetch(path);
+  const payload = await readApiJson<CursorPageResponse<ArticleListItem> | { message?: string | string[] }>(response);
+
+  if (!response.ok || !payload || "message" in payload) {
+    return {
+      ok: false,
+      error: getApiErrorMessage(payload, "内容加载失败，请稍后重试。"),
+      data: null,
+    };
+  }
+
+  return {
+    ok: true,
+    error: "",
+    data: payload as CursorPageResponse<ArticleListItem>,
+  };
+}
+
+function ArticleRow({ article }: { article: ArticleListItem }) {
+  return (
+    <Link
+      className="grid gap-5 px-6 py-6 transition hover:bg-[#fafafa] md:grid-cols-[minmax(0,1fr)_132px]"
+      href={`/articles/${article.id}`}
+      onClick={() => markArticleViewIntent(window.sessionStorage, article.id)}
+    >
+      <article>
+        <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
+          <span className="rounded bg-[#fff1f1] px-2 py-1 font-semibold text-[#ff4d4f]">质量分 {article.qualityScore}</span>
+          <span className="text-[#8f959e]">{article.author.nickname}</span>
+          <span className="text-[#8f959e]">{formatTime(article.publishedAt)}</span>
+        </div>
+        <h2 className="text-xl font-semibold leading-8">{article.title}</h2>
+        <p className="mt-3 max-w-3xl text-sm leading-7 text-[#5d6673]">{article.summary}</p>
+      </article>
+      <div className="flex items-end justify-between gap-4 md:block md:text-right">
+        <div>
+          <div className="text-sm text-[#8f959e]">排序分</div>
+          <div className="mt-1 text-2xl font-semibold text-[#1f2329]">{article.ranking.rankScore}</div>
+        </div>
+        <div className="mt-4 text-sm text-[#8f959e]">{formatCount(article.engagement.views)} 阅读</div>
+      </div>
+    </Link>
+  );
+}
+
+function RankingPanel({ href, items, title }: { href: string; items: ArticleListItem[]; title: string }) {
+  return (
+    <div className="bg-white px-5 py-5">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <Link className="text-xs text-[#8f959e] hover:text-[#ff4d4f]" href={href}>
+          查看全部
+        </Link>
+      </div>
+      <div className="grid gap-3">
+        {items.length ? (
+          items.map((item, index) => (
+            <Link
+              className="flex gap-3 rounded-md border border-[#eeeeee] px-3 py-3 hover:bg-[#fafafa]"
+              href={`/articles/${item.id}`}
+              key={item.id}
+              onClick={() => markArticleViewIntent(window.sessionStorage, item.id)}
+            >
+              <span className="font-semibold text-[#ff4d4f]">{index + 1}</span>
+              <div>
+                <div className="text-sm font-semibold leading-6">{item.title}</div>
+                <div className="mt-1 text-xs text-[#8f959e]">
+                  热度 {item.ranking.hotScore} · 质量 {item.qualityScore}
+                </div>
+              </div>
+            </Link>
+          ))
+        ) : (
+          <div className="rounded-md border border-[#eeeeee] px-3 py-6 text-center text-sm text-[#8f959e]">暂无榜单内容</div>
+        )}
+      </div>
+    </div>
   );
 }

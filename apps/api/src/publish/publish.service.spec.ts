@@ -35,13 +35,13 @@ const blockBody: RichTextDocument = {
   ],
 };
 
-function createDraft(body: RichTextDocument) {
+function createDraft(body: RichTextDocument, title = "AI 如何改变内容创作") {
   return {
     id: "draft-1",
     authorId: "user-1",
     mode: DraftMode.Fast,
     status: DraftStatus.Draft,
-    title: "AI 如何改变内容创作",
+    title,
     body,
     version: 1,
     createdAt: new Date("2026-06-04T10:00:00.000Z"),
@@ -49,23 +49,28 @@ function createDraft(body: RichTextDocument) {
   };
 }
 
-function createService(body: RichTextDocument) {
+function createService(
+  body: RichTextDocument,
+  options: { existingArticleId?: string; draftTitle?: string } = {},
+) {
+  const draft = createDraft(body, options.draftTitle);
   const calls = {
     auditRecords: [] as Array<{ decision: AuditDecision }>,
     auditRecordArticleLinks: [] as Array<{ id: string; articleId: string }>,
     qualityScores: [] as Array<{ overall: number }>,
     qualityScoreArticleLinks: [] as Array<{ id: string; articleId: string }>,
     articles: [] as Array<{ title: string; summary: string }>,
-    revisions: [] as Array<{ title: string }>,
+    articleUpdates: [] as Array<{ id: string; title: string; body: RichTextDocument; summary: string }>,
+    revisions: [] as Array<{ title: string; body: RichTextDocument; reason?: string }>,
     draftUpdates: [] as Array<{ status: DraftStatus }>,
   };
 
   const tx = {
     draft: {
-      findFirst: async () => createDraft(body),
+      findFirst: async () => draft,
       update: async ({ data }: { data: { status: DraftStatus } }) => {
         calls.draftUpdates.push({ status: data.status });
-        return { ...createDraft(body), status: data.status };
+        return { ...draft, status: data.status };
       },
     },
     auditRecord: {
@@ -97,7 +102,7 @@ function createService(body: RichTextDocument) {
       },
     },
     article: {
-      findFirst: async () => null,
+      findFirst: async () => (options.existingArticleId ? { id: options.existingArticleId } : null),
       create: async ({ data }: { data: { title: string; summary: string } }) => {
         calls.articles.push({ title: data.title, summary: data.summary });
         return {
@@ -107,10 +112,30 @@ function createService(body: RichTextDocument) {
           ...data,
         };
       },
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: { title: string; body: unknown; summary: string };
+      }) => {
+        calls.articleUpdates.push({
+          id: where.id,
+          title: data.title,
+          body: data.body as RichTextDocument,
+          summary: data.summary,
+        });
+        return {
+          id: where.id,
+          publishedAt: new Date("2026-06-04T10:00:00.000Z"),
+          updatedAt: new Date("2026-06-04T10:00:00.000Z"),
+          ...data,
+        };
+      },
     },
     articleRevision: {
-      create: async ({ data }: { data: { title: string } }) => {
-        calls.revisions.push({ title: data.title });
+      create: async ({ data }: { data: { title: string; body: unknown; reason?: string } }) => {
+        calls.revisions.push({ title: data.title, body: data.body as RichTextDocument, reason: data.reason });
         return { id: "revision-1", createdAt: new Date("2026-06-04T10:00:00.000Z"), ...data };
       },
     },
@@ -169,6 +194,11 @@ function createArticleDetailService() {
             suggestions: ["补充真实案例"],
             createdAt: new Date("2026-06-04T10:00:00.000Z"),
           },
+        ],
+        events: [
+          { type: "VIEW", value: 12 },
+          { type: "LIKE", value: 3 },
+          { type: "FAVORITE", value: 2 },
         ],
       }),
     },
@@ -269,6 +299,45 @@ describe("PublishService", () => {
     assert.deepEqual(calls.qualityScoreArticleLinks, [{ id: "score-1", articleId: "article-1" }]);
   });
 
+  it("republishes a passing draft by updating the existing article snapshot", async () => {
+    const updatedBody: RichTextDocument = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Updated body after the creator edits the published draft." }],
+        },
+      ],
+    };
+    const { service, calls } = createService(updatedBody, {
+      existingArticleId: "article-1",
+      draftTitle: "Updated published article",
+    });
+
+    const result = await service.publishDraft("user-1", "draft-1");
+
+    assert.equal(result.status, "PUBLISHED");
+    assert.equal(result.articleId, "article-1");
+    assert.equal(calls.articles.length, 0);
+    assert.deepEqual(calls.articleUpdates, [
+      {
+        id: "article-1",
+        title: "Updated published article",
+        body: updatedBody,
+        summary: "Updated body after the creator edits the published draft.",
+      },
+    ]);
+    assert.deepEqual(calls.revisions, [
+      {
+        title: "Updated published article",
+        body: updatedBody,
+        reason: "二次发布更新",
+      },
+    ]);
+    assert.deepEqual(calls.auditRecordArticleLinks, [{ id: "audit-1", articleId: "article-1" }]);
+    assert.deepEqual(calls.qualityScoreArticleLinks, [{ id: "score-1", articleId: "article-1" }]);
+  });
+
   it("keeps a warn draft unpublished and returns revision guidance", async () => {
     const { service, calls } = createService(warnBody);
 
@@ -303,6 +372,13 @@ describe("PublishService", () => {
     assert.equal(article.author.nickname, "训练营创作者");
     assert.equal(article.latestAudit?.result.decision, AuditDecision.Pass);
     assert.equal(article.latestScore?.overall, 88);
+    assert.deepEqual(article.engagement, {
+      views: 12,
+      likes: 3,
+      favorites: 2,
+    });
+    assert.equal(article.ranking?.qualityScore, 88);
+    assert.equal(article.ranking?.hotScore, 36);
   });
 
   it("falls back to draft-linked audit and score records for older articles", async () => {
