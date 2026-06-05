@@ -225,8 +225,8 @@ export default function DraftEditorPage() {
               头条号发文规范
             </Link>
             <span className="hidden sm:block">消息</span>
-            <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]" href="/workspace">
-              工作台
+            <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]" href="/creator">
+              {user ? user.nickname : "--"}
             </Link>
           </div>
         </div>
