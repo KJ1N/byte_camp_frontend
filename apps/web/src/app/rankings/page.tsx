@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { ArticleListItem, CursorPageResponse } from "@bytecamp-aigc/shared";
-
+import { clearAuthSession, getStoredUser, type AuthUser } from "@/lib/auth";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { markArticleViewIntent } from "@/lib/engagement-state";
 
@@ -29,6 +29,7 @@ function formatTime(value: string) {
 }
 
 export default function RankingsPage() {
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [tab, setTab] = useState<RankingTab>("hot");
   const [items, setItems] = useState<ArticleListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
@@ -38,6 +39,7 @@ export default function RankingsPage() {
 
   useEffect(() => {
     const initialTab = getInitialTab();
+    setUser(getStoredUser());
     setTab(initialTab);
     void loadRanking(initialTab, true);
   }, []);
@@ -77,6 +79,11 @@ export default function RankingsPage() {
     setLoadingMore(false);
   }
 
+  function logout() {
+    clearAuthSession();
+    setUser(null);
+  }
+  
   return (
     <main className="min-h-screen bg-[#f5f5f5] text-[#1f2329]">
       <header className="sticky top-0 z-20 border-b border-[#ededed] bg-white">
@@ -84,9 +91,39 @@ export default function RankingsPage() {
           <Link className="text-lg font-semibold text-[#ff4d4f]" href="/">
             AI Creator Hub
           </Link>
-          <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 text-sm font-medium hover:bg-[#eeeeee]" href="/workspace">
-            工作台
-          </Link>
+          <div className="flex items-center gap-4 text-sm">
+            {user ? (
+              <div className="group relative">
+                <Link
+                  className="rounded-md bg-[#f6f7f9] px-4 py-2 font-semibold text-[#1f2329] hover:bg-[#eeeeee]"
+                  href="/creator"
+                >
+                  {user.nickname}
+                </Link>
+                <div className="invisible absolute right-0 top-full z-30 w-40 pt-2 opacity-0 transition group-hover:visible group-hover:opacity-100">
+                  <div className="rounded-md border border-[#eeeeee] bg-white py-2 shadow-[0_12px_36px_rgba(31,35,41,0.12)]">
+                    <Link className="block px-4 py-2 text-[#4e5661] hover:bg-[#fff1f1] hover:text-[#ff4d4f]" href="/workspace">
+                      工作台
+                    </Link>
+                    <Link className="block px-4 py-2 text-[#4e5661] hover:bg-[#fff1f1] hover:text-[#ff4d4f]" href="/drafts">
+                      草稿箱
+                    </Link>
+                    <button
+                      className="block w-full px-4 py-2 text-left text-[#4e5661] hover:bg-[#fff1f1] hover:text-[#ff4d4f]"
+                      type="button"
+                      onClick={logout}
+                    >
+                      退出登录
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <Link className="rounded-md bg-[#ff4d4f] px-4 py-2 font-semibold text-white" href="/login">
+                登录
+              </Link>
+            )}
+          </div>
         </div>
       </header>
 
