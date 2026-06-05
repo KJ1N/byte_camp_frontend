@@ -127,6 +127,14 @@ export interface DraftVersionSummary {
   createdAt: string;
 }
 
+export interface RestoreDraftVersionInput {
+  versionId: string;
+}
+
+export interface RestoreDraftVersionResponse extends DraftDetail {
+  restoredFromVersion: number;
+}
+
 export enum RiskCategory {
   Adult = "ADULT",
   Gambling = "GAMBLING",

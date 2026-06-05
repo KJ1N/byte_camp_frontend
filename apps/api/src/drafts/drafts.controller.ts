@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post, UseGuards } from "@nestjs/common";
-import type { CreateDraftInput, UpdateDraftInput } from "@bytecamp-aigc/shared";
+import type { CreateDraftInput, RestoreDraftVersionInput, UpdateDraftInput } from "@bytecamp-aigc/shared";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/auth.guard";
 import { DraftsService } from "./drafts.service";
@@ -32,5 +32,14 @@ export class DraftsController {
   @Get(":id/versions")
   listVersions(@CurrentUser("userId") userId: string, @Param("id") id: string) {
     return this.draftsService.listVersions(userId, id);
+  }
+
+  @Post(":id/restore")
+  restoreVersion(
+    @CurrentUser("userId") userId: string,
+    @Param("id") id: string,
+    @Body() body: RestoreDraftVersionInput,
+  ) {
+    return this.draftsService.restoreVersion(userId, id, body);
   }
 }

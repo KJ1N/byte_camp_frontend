@@ -93,14 +93,23 @@ importers:
       '@bytecamp-aigc/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@tiptap/extension-image':
+        specifier: 3.24.0
+        version: 3.24.0(@tiptap/core@3.24.0(@tiptap/pm@3.24.0))
+      '@tiptap/extension-link':
+        specifier: 3.24.0
+        version: 3.24.0(@tiptap/core@3.24.0(@tiptap/pm@3.24.0))(@tiptap/pm@3.24.0)
+      '@tiptap/extension-underline':
+        specifier: 3.24.0
+        version: 3.24.0(@tiptap/core@3.24.0(@tiptap/pm@3.24.0))
       '@tiptap/pm':
-        specifier: ^3.11.1
+        specifier: 3.24.0
         version: 3.24.0
       '@tiptap/react':
-        specifier: ^3.11.1
+        specifier: 3.24.0
         version: 3.24.0(@floating-ui/dom@1.7.6)(@tiptap/core@3.24.0(@tiptap/pm@3.24.0))(@tiptap/pm@3.24.0)(@types/react-dom@19.2.3(@types/react@19.2.16))(@types/react@19.2.16)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tiptap/starter-kit':
-        specifier: ^3.11.1
+        specifier: 3.24.0
         version: 3.24.0
       next:
         specifier: ^16.0.5
@@ -858,6 +867,11 @@ packages:
     peerDependencies:
       '@tiptap/core': 3.24.0
       '@tiptap/pm': 3.24.0
+
+  '@tiptap/extension-image@3.24.0':
+    resolution: {integrity: sha512-mH+bvsX2cPKuZzV7YMQi4FV2YbDP+Kmq36bY+Bwi/x4mYUc8u0cjQxcu8RzLO7GtsgUJPxGMwfkQxmDqXFLZvw==}
+    peerDependencies:
+      '@tiptap/core': 3.24.0
 
   '@tiptap/extension-italic@3.24.0':
     resolution: {integrity: sha512-mf3cbNlbMPUNj3IyUkIke+o3ZpOUrtVeY5Yqs5IM/VhkUUh/PdIzqw74VuqEAJ0Z4oZ6nNDHeYLrl3Be1j99lQ==}
@@ -3135,6 +3149,10 @@ snapshots:
     dependencies:
       '@tiptap/core': 3.24.0(@tiptap/pm@3.24.0)
       '@tiptap/pm': 3.24.0
+
+  '@tiptap/extension-image@3.24.0(@tiptap/core@3.24.0(@tiptap/pm@3.24.0))':
+    dependencies:
+      '@tiptap/core': 3.24.0(@tiptap/pm@3.24.0)
 
   '@tiptap/extension-italic@3.24.0(@tiptap/core@3.24.0(@tiptap/pm@3.24.0))':
     dependencies:

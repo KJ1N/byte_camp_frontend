@@ -3,11 +3,22 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { DraftDetail, DraftVersionSummary, RichTextDocument, RichTextNode } from "@bytecamp-aigc/shared";
+import type {
+  DraftDetail,
+  DraftVersionSummary,
+  RestoreDraftVersionResponse,
+  RichTextDocument,
+  RichTextNode,
+} from "@bytecamp-aigc/shared";
 
 import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
+import {
+  clearDraftOfflineState,
+  readDraftOfflineState,
+  writeDraftOfflineState,
+} from "@/lib/draft-offline-state";
 
 const emptyDoc: RichTextDocument = {
   type: "doc",
@@ -34,10 +45,6 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-function offlineKey(id: string) {
-  return `aigc_draft_offline_${id}`;
-}
-
 export default function DraftEditorPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -53,9 +60,14 @@ export default function DraftEditorPage() {
   const [error, setError] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [hasRecovery, setHasRecovery] = useState(false);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [restoreMessage, setRestoreMessage] = useState("");
+  const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
 
   const wordCount = useMemo(() => textFromDoc(body).length, [body]);
-  const canPublish = Boolean(draft && !dirty && status !== "saving" && status !== "loading");
+  const canPublish = Boolean(
+    draft && !dirty && !hasRecovery && !restoringVersionId && status !== "saving" && status !== "loading",
+  );
 
   useEffect(() => {
     const storedToken = getStoredToken();
@@ -105,7 +117,7 @@ export default function DraftEditorPage() {
     setLastSavedAt(loadedDraft.updatedAt);
     setDirty(false);
     setStatus("idle");
-    setHasRecovery(Boolean(window.localStorage.getItem(offlineKey(draftId))));
+    setHasRecovery(Boolean(readDraftOfflineState(window.localStorage, draftId)));
     void loadVersions(authToken);
   }
 
@@ -126,7 +138,7 @@ export default function DraftEditorPage() {
 
         if (!response.ok || !payload || "message" in payload) {
           const message = getApiErrorMessage(payload, reason === "auto" ? "自动保存失败，已暂存到本地。" : "保存失败，请稍后重试。");
-          window.localStorage.setItem(offlineKey(draft.id), JSON.stringify({ title, body }));
+          writeDraftOfflineState(window.localStorage, draft.id, { title, body });
           setHasRecovery(true);
           setError(message);
           setStatus("idle");
@@ -140,11 +152,11 @@ export default function DraftEditorPage() {
         setLastSavedAt(savedDraft.updatedAt);
         setDirty(false);
         setHasRecovery(false);
-        window.localStorage.removeItem(offlineKey(draft.id));
+        clearDraftOfflineState(window.localStorage, draft.id);
         setStatus("idle");
         void loadVersions(token);
       } catch {
-        window.localStorage.setItem(offlineKey(draft.id), JSON.stringify({ title, body }));
+        writeDraftOfflineState(window.localStorage, draft.id, { title, body });
         setHasRecovery(true);
         setError(reason === "auto" ? "自动保存失败，已暂存到本地。" : "保存失败，已暂存到本地。");
         setStatus("idle");
@@ -154,13 +166,13 @@ export default function DraftEditorPage() {
   );
 
   useEffect(() => {
-    if (!dirty || status === "saving") return;
+    if (!dirty || status === "saving" || restoringVersionId) return;
     const timer = window.setInterval(() => {
       void saveDraft("auto");
     }, 30000);
 
     return () => window.clearInterval(timer);
-  }, [dirty, saveDraft, status]);
+  }, [dirty, restoringVersionId, saveDraft, status]);
 
   function updateTitle(nextTitle: string) {
     setTitle(nextTitle);
@@ -173,19 +185,59 @@ export default function DraftEditorPage() {
   }
 
   function restoreOfflineDraft() {
-    const raw = window.localStorage.getItem(offlineKey(draftId));
-    if (!raw) return;
+    const payload = readDraftOfflineState(window.localStorage, draftId);
+    if (!payload) return;
 
-    try {
-      const payload = JSON.parse(raw) as { title?: string; body?: RichTextDocument };
-      if (payload.title) setTitle(payload.title);
-      if (payload.body) setBody(payload.body);
-      setDirty(true);
-      setHasRecovery(false);
-    } catch {
-      window.localStorage.removeItem(offlineKey(draftId));
-      setHasRecovery(false);
+    setTitle(payload.title);
+    setBody(payload.body);
+    setDirty(true);
+    setHasRecovery(false);
+    setRestoreMessage("已恢复本地暂存内容，请保存到服务器后再发布。");
+  }
+
+  async function restoreServerVersion(version: DraftVersionSummary) {
+    if (!token || !draft || restoringVersionId) return;
+
+    if (dirty || hasRecovery) {
+      const confirmed = window.confirm("恢复历史版本会覆盖当前页面上的未保存修改。确认继续吗？");
+      if (!confirmed) return;
     }
+
+    setRestoringVersionId(version.id);
+    setError("");
+    setRestoreMessage("");
+
+    const response = await apiFetch(`/drafts/${draft.id}/restore`, {
+      method: "POST",
+      authToken: token,
+      body: JSON.stringify({ versionId: version.id }),
+    });
+    const payload = await readApiJson<RestoreDraftVersionResponse | { message?: string | string[] }>(response);
+
+    if (response.status === 401) {
+      clearAuthSession();
+      router.push("/login");
+      return;
+    }
+
+    if (!response.ok || !payload || "message" in payload) {
+      setError(getApiErrorMessage(payload, "版本恢复失败，请稍后重试。"));
+      setRestoringVersionId(null);
+      return;
+    }
+
+    const restoredDraft = payload as RestoreDraftVersionResponse;
+    setDraft(restoredDraft);
+    setTitle(restoredDraft.title);
+    setBody(restoredDraft.body);
+    setLastSavedAt(restoredDraft.updatedAt);
+    setDirty(false);
+    setHasRecovery(false);
+    clearDraftOfflineState(window.localStorage, draft.id);
+    setSelectedVersionId(null);
+    setRestoreMessage(`已从 v${restoredDraft.restoredFromVersion} 恢复，并保存为 v${restoredDraft.version}。`);
+    setRestoringVersionId(null);
+    void loadVersions(token);
   }
 
   function appendAssistantSuggestion() {
@@ -268,7 +320,17 @@ export default function DraftEditorPage() {
 
           <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-4 border-t border-[#eeeeee] bg-white px-8 py-4">
             <div className="flex flex-wrap items-center gap-6 text-sm text-[#8f959e]">
-              <span>{status === "saving" ? "草稿保存中" : dirty ? "有未保存修改" : "草稿已保存"}</span>
+              <span>
+                {restoringVersionId
+                  ? "正在恢复历史版本"
+                  : status === "saving"
+                    ? "草稿保存中"
+                    : hasRecovery
+                      ? "有本地未同步内容"
+                      : dirty
+                        ? "有未保存修改"
+                        : "草稿已保存"}
+              </span>
               <span>共 {wordCount} 字</span>
               <span>v{draft?.version ?? "-"}</span>
               <span>{lastSavedAt ? formatTime(lastSavedAt) : "尚未保存"}</span>
@@ -285,7 +347,7 @@ export default function DraftEditorPage() {
                 <button
                   className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#a8adb5]"
                   disabled
-                  title="请先保存草稿，再进入发布审核"
+                  title="请先保存草稿并同步本地内容，再进入发布审核"
                   type="button"
                 >
                   预览并发布
@@ -293,7 +355,7 @@ export default function DraftEditorPage() {
               )}
               <button
                 className="rounded-md bg-[#ff4d4f] px-6 py-2.5 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
-                disabled={!draft || status === "saving" || !dirty}
+                disabled={!draft || status === "saving" || Boolean(restoringVersionId) || !dirty}
                 type="button"
                 onClick={() => void saveDraft("manual")}
               >
@@ -308,6 +370,12 @@ export default function DraftEditorPage() {
             <span className="h-6 w-6 rounded-md bg-gradient-to-br from-[#ff5f62] to-[#8c7bff]" />
             <h2 className="text-lg font-semibold">头条创作助手</h2>
           </div>
+
+          {restoreMessage ? (
+            <div className="mb-6 rounded-md border border-[#d8ead8] bg-[#f5fbf5] px-4 py-3 text-sm text-[#2f6b37]">
+              {restoreMessage}
+            </div>
+          ) : null}
 
           <div className="mb-8 flex gap-8 border-b border-transparent text-sm">
             <button className="border-b-2 border-[#1f2329] pb-3 font-semibold text-[#1f2329]" type="button">
@@ -362,9 +430,39 @@ export default function DraftEditorPage() {
             <div className="mb-3 text-sm font-semibold text-[#4e5661]">版本记录</div>
             <div className="grid gap-2">
               {versions.map((version) => (
-                <div className="rounded-md border border-[#eeeeee] bg-white px-3 py-2 text-sm" key={version.id}>
-                  <div className="font-medium text-[#1f2329]">v{version.version}</div>
-                  <div className="mt-1 text-xs text-[#8f959e]">{formatTime(version.createdAt)}</div>
+                <div
+                  className={[
+                    "rounded-md border bg-white px-3 py-2 text-sm transition",
+                    selectedVersionId === version.id ? "border-[#ffb2b3]" : "border-[#eeeeee]",
+                  ].join(" ")}
+                  key={version.id}
+                >
+                  <button
+                    className="w-full text-left"
+                    type="button"
+                    onClick={() => setSelectedVersionId(selectedVersionId === version.id ? null : version.id)}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="font-medium text-[#1f2329]">v{version.version}</div>
+                      <div className="text-xs text-[#8f959e]">{formatTime(version.createdAt)}</div>
+                    </div>
+                    <div className="mt-1 truncate text-xs text-[#6b7280]">{version.title}</div>
+                  </button>
+                  {selectedVersionId === version.id ? (
+                    <div className="mt-3 border-t border-[#f0f0f0] pt-3">
+                      <p className="max-h-24 overflow-hidden text-xs leading-6 text-[#6b7280]">
+                        {textFromDoc(version.snapshot) || "该版本暂无正文内容"}
+                      </p>
+                      <button
+                        className="mt-3 rounded-md bg-[#fff1f1] px-3 py-2 text-xs font-semibold text-[#ff4d4f] disabled:text-[#d6a4a5]"
+                        disabled={Boolean(restoringVersionId)}
+                        type="button"
+                        onClick={() => void restoreServerVersion(version)}
+                      >
+                        {restoringVersionId === version.id ? "恢复中..." : "恢复此版本"}
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               ))}
               {!versions.length ? <div className="text-sm text-[#8f959e]">暂无版本记录</div> : null}

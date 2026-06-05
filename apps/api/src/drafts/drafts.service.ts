@@ -1,12 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
 import {
   DraftMode,
+  DraftStatus,
   type CreateDraftInput,
   type DraftDetail,
   type DraftSummary,
   type DraftVersionSummary,
   type RichTextDocument,
+  type RestoreDraftVersionInput,
+  type RestoreDraftVersionResponse,
   type UpdateDraftInput,
 } from "@bytecamp-aigc/shared";
 import { PrismaService } from "../prisma/prisma.service";
@@ -120,6 +123,58 @@ export class DraftsService {
       version: version.version,
       createdAt: version.createdAt.toISOString(),
     }));
+  }
+
+  async restoreVersion(
+    authorId: string,
+    id: string,
+    input: RestoreDraftVersionInput,
+  ): Promise<RestoreDraftVersionResponse> {
+    if (!input.versionId?.trim()) throw new BadRequestException("Version id is required");
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.draft.findFirst({
+        where: { id, authorId },
+      });
+
+      if (!existing) throw new NotFoundException("Draft not found");
+      if (existing.status === DraftStatus.Published) {
+        throw new ConflictException("Published drafts cannot be restored directly");
+      }
+
+      const version = await tx.draftVersion.findFirst({
+        where: {
+          id: input.versionId,
+          draftId: existing.id,
+        },
+      });
+
+      if (!version) throw new NotFoundException("Draft version not found");
+
+      const snapshot = this.ensureRichTextDocument(version.snapshot);
+      const draft = await tx.draft.update({
+        where: { id: existing.id },
+        data: {
+          title: version.title,
+          body: snapshot as unknown as Prisma.InputJsonValue,
+          version: { increment: 1 },
+        },
+      });
+
+      await tx.draftVersion.create({
+        data: {
+          draftId: draft.id,
+          title: draft.title,
+          snapshot: snapshot as unknown as Prisma.InputJsonValue,
+          version: draft.version,
+        },
+      });
+
+      return {
+        ...this.mapDraftDetail(draft),
+        restoredFromVersion: version.version,
+      };
+    });
   }
 
   private ensureTitle(value: string) {
