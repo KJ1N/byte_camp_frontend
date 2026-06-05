@@ -158,6 +158,43 @@ export function createPnpmSpawnCommand({
   };
 }
 
+export function apiHealthUrl(apiBaseUrl) {
+  return `${apiBaseUrl.replace(/\/+$/, "")}/health`;
+}
+
+export async function waitForHttpOk({
+  url,
+  timeoutMs = 120_000,
+  intervalMs = 500,
+  fetchImpl = fetch,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastFailure = "no response";
+
+  while (true) {
+    try {
+      const response = await fetchImpl(url);
+
+      if (response.ok) {
+        return;
+      }
+
+      lastFailure = `HTTP ${response.status}`;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Timed out waiting for API readiness at ${url}. Last failure: ${lastFailure}`,
+      );
+    }
+
+    await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
+  }
+}
+
 function spawnPnpm(label, args, env) {
   const command = createPnpmSpawnCommand({ pnpmArgs: args });
   const child = spawn(command.file, command.args, {
@@ -180,31 +217,13 @@ function stopChildren(children) {
   }
 }
 
-export function startDevProcesses(config, baseEnv = process.env) {
-  const shared = spawnPnpm(
-    "packages/shared",
-    ["--filter", "@bytecamp-aigc/shared", "dev"],
-    baseEnv,
-  );
-  const api = spawnPnpm(
-    "apps/api",
-    ["--filter", "@bytecamp-aigc/api", "dev"],
-    {
-      ...baseEnv,
-      PORT: String(config.apiPort),
-    },
-  );
-  const web = spawnPnpm(
-    "apps/web",
-    ["--filter", "@bytecamp-aigc/web", "dev"],
-    {
-      ...baseEnv,
-      PORT: String(config.webPort),
-      NEXT_PUBLIC_API_BASE_URL: config.apiBaseUrl,
-    },
-  );
-
-  const children = [shared, api, web];
+export async function startDevProcesses(config, baseEnv = process.env, options = {}) {
+  const spawnProcess = options.spawnProcess ?? spawnPnpm;
+  const waitForApiReady =
+    options.waitForApiReady ??
+    ((url) => waitForHttpOk({ url }));
+  const registerProcessSignals = options.registerProcessSignals ?? true;
+  const children = [];
   let stopping = false;
 
   const shutdown = (exitCode = 0) => {
@@ -216,7 +235,8 @@ export function startDevProcesses(config, baseEnv = process.env) {
     process.exitCode = exitCode;
   };
 
-  for (const child of children) {
+  const trackChild = (child) => {
+    children.push(child);
     child.once("exit", (code, signal) => {
       if (stopping) {
         return;
@@ -225,10 +245,42 @@ export function startDevProcesses(config, baseEnv = process.env) {
       const exitCode = code ?? (signal ? 1 : 0);
       shutdown(exitCode);
     });
-  }
 
-  process.once("SIGINT", () => shutdown(0));
-  process.once("SIGTERM", () => shutdown(0));
+    return child;
+  };
+
+  trackChild(spawnProcess(
+    "packages/shared",
+    ["--filter", "@bytecamp-aigc/shared", "dev"],
+    baseEnv,
+  ));
+  trackChild(spawnProcess(
+    "apps/api",
+    ["--filter", "@bytecamp-aigc/api", "dev"],
+    {
+      ...baseEnv,
+      PORT: String(config.apiPort),
+    },
+  ));
+
+  const healthUrl = apiHealthUrl(config.apiBaseUrl);
+  console.log(`Waiting for API readiness: ${healthUrl}`);
+  await waitForApiReady(healthUrl);
+
+  trackChild(spawnProcess(
+    "apps/web",
+    ["--filter", "@bytecamp-aigc/web", "dev"],
+    {
+      ...baseEnv,
+      PORT: String(config.webPort),
+      NEXT_PUBLIC_API_BASE_URL: config.apiBaseUrl,
+    },
+  ));
+
+  if (registerProcessSignals) {
+    process.once("SIGINT", () => shutdown(0));
+    process.once("SIGTERM", () => shutdown(0));
+  }
 
   return children;
 }
@@ -258,7 +310,7 @@ export async function main() {
     return;
   }
 
-  startDevProcesses(config);
+  await startDevProcesses(config);
 }
 
 const isMainModule =

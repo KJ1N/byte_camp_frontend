@@ -18,7 +18,13 @@ async function main() {
 
   await prisma.prompt.upsert({
     where: { id: "platform-news-starter" },
-    update: {},
+    update: {
+      systemPrompt: "你是一个严谨的中文内容创作助手，擅长生成结构清晰、可读性强、适合资讯平台分发的图文内容。",
+      userTemplate: "请围绕主题 {{topic}}，面向 {{audience}}，用 {{style}} 风格生成标题、大纲和正文。",
+      paramsSchema: { topic: "string", audience: "string", style: "string" },
+      fewShots: [],
+      isStarter: true,
+    },
     create: {
       id: "platform-news-starter",
       owner: "PLATFORM",

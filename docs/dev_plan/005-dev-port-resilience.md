@@ -208,3 +208,16 @@ corepack pnpm dev
 - Node.js 如何用 `net` 模块检测端口。
 - 为什么 Web 和 API 的端口需要一起编排。
 - `PORT` 和 `NEXT_PUBLIC_API_BASE_URL` 在本项目中的作用。
+
+## 补充：等待 API ready 后再启动 Web
+
+本地开发时，`pnpm dev` 如果同时启动 shared、API 和 Web，Web 可能在 API watch 编译完成前就已经可访问。用户打开 `/workspace` 后，前端会立刻请求 `/drafts/mine`，如果此时 `http://localhost:<apiPort>/health` 还不可用，浏览器会抛出 `TypeError: Failed to fetch`。
+
+修正方案：
+
+- `scripts/dev.mjs` 先启动 shared watch 和 API dev。
+- 脚本轮询 `http://localhost:<apiPort>/health`。
+- 只有 health 返回 2xx 后才启动 Web dev server，并注入 `NEXT_PUBLIC_API_BASE_URL`。
+- 如果 API 长时间未 ready，脚本输出明确的 readiness timeout，而不是让前端页面先报网络错误。
+
+该修正不改变业务 API、数据库、鉴权、审核、评分、发布或榜单逻辑，只改善本地开发进程编排。

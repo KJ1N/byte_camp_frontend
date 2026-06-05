@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type {
   CreatorInspirationsResponse,
@@ -6,13 +6,59 @@ import type {
   GenerateArticleInput,
   RichTextDocument,
 } from "@bytecamp-aigc/shared";
+import { PromptsService } from "../prompts/prompts.service";
+import { AiProviderClient } from "./ai-provider.client";
+import { AiProviderConfigurationException } from "./ai-gateway.errors";
+import {
+  ARTICLE_GENERATION_CATEGORY,
+  buildArticleGenerationMessages,
+  defaultArticleGenerationPrompt,
+  parseArticleGenerationJson,
+  type ArticleGenerationPrompt,
+} from "./ai-gateway.prompts";
+
+type ProviderMode = "auto" | "mock" | "live";
+
+interface ProviderConfig {
+  apiKey: string;
+  baseUrl?: string;
+  model: string;
+  timeoutMs: number;
+  maxRetries: number;
+}
 
 @Injectable()
 export class AiGatewayService {
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    @Optional() private readonly promptsService?: PromptsService,
+    @Optional() private readonly providerClient?: AiProviderClient,
+  ) {}
 
   async generateArticleDraft(input: GenerateArticleInput): Promise<GeneratedArticleDraft> {
-    const model = this.config.get<string>("AI_MODEL") ?? "mock-model";
+    if (!this.shouldUseLiveProvider()) {
+      return this.generateMockArticleDraft(input);
+    }
+
+    const providerConfig = this.getRequiredProviderConfig();
+    const prompt = await this.getArticleGenerationPrompt();
+    const completion = await this.getProviderClient().complete({
+      ...providerConfig,
+      messages: buildArticleGenerationMessages(input, prompt),
+    });
+    const article = parseArticleGenerationJson(completion.content);
+
+    return {
+      model: completion.model,
+      title: article.title,
+      outline: article.outline,
+      bodyText: article.bodyText,
+      body: this.toRichTextDocument(this.paragraphsFromText(article.bodyText)),
+    };
+  }
+
+  private async generateMockArticleDraft(input: GenerateArticleInput): Promise<GeneratedArticleDraft> {
+    const model = this.getMockModel();
     const outline = ["趋势背景", "核心机会", "实践方法", "风险与边界", "行动建议"];
     const bodyText = [
       `面向${input.audience}，${input.topic}正在从单点工具升级为完整的内容生产链路。`,
@@ -36,7 +82,7 @@ export class AiGatewayService {
   }
 
   async generateCreatorInspirations(): Promise<CreatorInspirationsResponse> {
-    const model = this.config.get<string>("AI_MODEL") ?? "mock-model";
+    const model = this.getMockModel();
 
     return {
       model,
@@ -83,5 +129,93 @@ export class AiGatewayService {
         content: [{ type: "text", text }],
       })),
     };
+  }
+
+  private async getArticleGenerationPrompt(): Promise<ArticleGenerationPrompt> {
+    return (
+      (await this.promptsService?.getStarterPrompt(ARTICLE_GENERATION_CATEGORY)) ??
+      defaultArticleGenerationPrompt
+    );
+  }
+
+  private shouldUseLiveProvider() {
+    const mode = this.getProviderMode();
+
+    if (mode === "mock") return false;
+    if (mode === "live") return true;
+
+    return this.hasUsableLiveConfig();
+  }
+
+  private getRequiredProviderConfig(): ProviderConfig {
+    const apiKey = this.readConfig("AI_API_KEY");
+    const model = this.readConfig("AI_MODEL");
+
+    if (!apiKey || !model || this.isPlaceholder(apiKey) || this.isPlaceholder(model)) {
+      throw new AiProviderConfigurationException();
+    }
+
+    return {
+      apiKey,
+      baseUrl: this.optionalConfig("AI_BASE_URL"),
+      model,
+      timeoutMs: this.readPositiveInt("AI_TIMEOUT_MS", 60_000),
+      maxRetries: this.readNonNegativeInt("AI_MAX_RETRIES", 1),
+    };
+  }
+
+  private hasUsableLiveConfig() {
+    return !this.isPlaceholder(this.readConfig("AI_API_KEY")) && !this.isPlaceholder(this.readConfig("AI_MODEL"));
+  }
+
+  private getProviderClient() {
+    return this.providerClient ?? new AiProviderClient();
+  }
+
+  private getProviderMode(): ProviderMode {
+    const rawMode = this.readConfig("AI_PROVIDER_MODE")?.toLowerCase();
+
+    if (rawMode === "live" || rawMode === "mock" || rawMode === "auto") {
+      return rawMode;
+    }
+
+    return "auto";
+  }
+
+  private getMockModel() {
+    const configuredModel = this.readConfig("AI_MODEL");
+    if (this.isPlaceholder(configuredModel)) return "mock-model";
+    return configuredModel ?? "mock-model";
+  }
+
+  private paragraphsFromText(text: string) {
+    return text
+      .split(/\n{2,}/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean);
+  }
+
+  private readConfig(key: string) {
+    const value = this.config.get<string>(key);
+    return typeof value === "string" ? value.trim() : undefined;
+  }
+
+  private optionalConfig(key: string) {
+    const value = this.readConfig(key);
+    return this.isPlaceholder(value) ? undefined : value;
+  }
+
+  private readPositiveInt(key: string, fallback: number) {
+    const value = Number.parseInt(this.readConfig(key) ?? "", 10);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  }
+
+  private readNonNegativeInt(key: string, fallback: number) {
+    const value = Number.parseInt(this.readConfig(key) ?? "", 10);
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  }
+
+  private isPlaceholder(value: string | undefined) {
+    return !value || value.startsWith("replace-with-") || value.includes("your-");
   }
 }

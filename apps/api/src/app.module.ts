@@ -15,10 +15,11 @@ import { RankingModule } from "./ranking/ranking.module";
 import { ScoringModule } from "./scoring/scoring.module";
 import { UsersModule } from "./users/users.module";
 import { HealthController } from "./common/health.controller";
+import { getRootEnvFilePath } from "./common/env-paths";
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: getRootEnvFilePath() }),
     PrismaModule,
     AuthModule,
     UsersModule,
@@ -36,4 +37,3 @@ import { HealthController } from "./common/health.controller";
   controllers: [HealthController],
 })
 export class AppModule {}
-

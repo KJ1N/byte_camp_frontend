@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import {
   chooseAvailablePort,
@@ -6,6 +7,8 @@ import {
   formatDevPortSummary,
   resolveDevConfig,
   shouldDryRun,
+  startDevProcesses,
+  waitForHttpOk,
 } from "./dev.mjs";
 
 test("chooseAvailablePort skips unavailable ports in order", async () => {
@@ -111,4 +114,77 @@ test("createPnpmSpawnCommand uses direct corepack spawn off Windows", () => {
 
   assert.equal(command.file, "corepack");
   assert.deepEqual(command.args, ["pnpm", "--version"]);
+});
+
+test("waitForHttpOk retries until the endpoint returns a successful response", async () => {
+  const calls = [];
+
+  await waitForHttpOk({
+    url: "http://localhost:3201/health",
+    timeoutMs: 1000,
+    intervalMs: 10,
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      return new Response(null, { status: calls.length === 3 ? 200 : 503 });
+    },
+    sleep: async () => {},
+  });
+
+  assert.deepEqual(calls, [
+    "http://localhost:3201/health",
+    "http://localhost:3201/health",
+    "http://localhost:3201/health",
+  ]);
+});
+
+test("waitForHttpOk reports a clear timeout when the endpoint never becomes ready", async () => {
+  await assert.rejects(
+    waitForHttpOk({
+      url: "http://localhost:3201/health",
+      timeoutMs: 0,
+      fetchImpl: async () => new Response(null, { status: 503 }),
+      sleep: async () => {},
+    }),
+    /Timed out waiting for API readiness at http:\/\/localhost:3201\/health/,
+  );
+});
+
+test("startDevProcesses waits for API readiness before spawning Web", async () => {
+  const events = [];
+  const children = [];
+
+  const spawnProcess = (label) => {
+    events.push(`spawn:${label}`);
+    const child = new EventEmitter();
+    child.killed = false;
+    child.kill = () => {
+      child.killed = true;
+    };
+    children.push(child);
+    return child;
+  };
+
+  await startDevProcesses(
+    {
+      webPort: 3200,
+      apiPort: 3201,
+      apiBaseUrl: "http://localhost:3201",
+    },
+    {},
+    {
+      registerProcessSignals: false,
+      spawnProcess,
+      waitForApiReady: async (url) => {
+        events.push(`wait:${url}`);
+      },
+    },
+  );
+
+  assert.deepEqual(events, [
+    "spawn:packages/shared",
+    "spawn:apps/api",
+    "wait:http://localhost:3201/health",
+    "spawn:apps/web",
+  ]);
+  assert.equal(children.length, 3);
 });
