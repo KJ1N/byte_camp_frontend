@@ -8,6 +8,8 @@ import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
 import type { RichTextDocument } from "@bytecamp-aigc/shared";
 
+import { richTextEditorContentClass } from "./rich-text-editor-style";
+
 interface RichTextEditorProps {
   value: RichTextDocument;
   onChange: (value: RichTextDocument) => void;
@@ -71,8 +73,7 @@ export function RichTextEditor({ value, onChange }: RichTextEditorProps) {
     immediatelyRender: false,
     editorProps: {
       attributes: {
-        class:
-          "min-h-[520px] outline-none px-2 py-8 text-[17px] leading-9 text-[#1f2329] prose-p:my-5 prose-strong:text-[#1f2329]",
+        class: richTextEditorContentClass,
       },
     },
     onUpdate({ editor: currentEditor }) {
@@ -159,7 +160,7 @@ export function RichTextEditor({ value, onChange }: RichTextEditorProps) {
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-2 border-b border-[#eeeeee] px-8 py-4">
+      <div className="flex flex-wrap items-center gap-2 border-b border-[#eeeeee] px-8 py-4 sticky top-16 bg-white z-10">
         {toolbarGroups.map((group, groupIndex) => (
           <div className="flex items-center gap-2" key={groupIndex}>
             {groupIndex > 0 ? <span className="mx-2 h-6 w-px bg-[#dddddd]" /> : null}

@@ -341,7 +341,7 @@ export default function DraftEditorPage() {
                   className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661] hover:border-[#ffb2b3] hover:text-[#ff4d4f]"
                   href={`/publish/${draft?.id}`}
                 >
-                  预览并发布
+                  发布
                 </Link>
               ) : (
                 <button
@@ -350,7 +350,7 @@ export default function DraftEditorPage() {
                   title="请先保存草稿并同步本地内容，再进入发布审核"
                   type="button"
                 >
-                  预览并发布
+                  发布
                 </button>
               )}
               <button
@@ -438,7 +438,7 @@ export default function DraftEditorPage() {
                   key={version.id}
                 >
                   <button
-                    className="w-full text-left"
+                    className="w-full text-left cursor-pointer"
                     type="button"
                     onClick={() => setSelectedVersionId(selectedVersionId === version.id ? null : version.id)}
                   >
@@ -454,7 +454,7 @@ export default function DraftEditorPage() {
                         {textFromDoc(version.snapshot) || "该版本暂无正文内容"}
                       </p>
                       <button
-                        className="mt-3 rounded-md bg-[#fff1f1] px-3 py-2 text-xs font-semibold text-[#ff4d4f] disabled:text-[#d6a4a5]"
+                        className="mt-3 rounded-md bg-[#fff1f1] px-3 py-2 text-xs font-semibold text-[#ff4d4f] disabled:text-[#d6a4a5] cursor-pointer "
                         disabled={Boolean(restoringVersionId)}
                         type="button"
                         onClick={() => void restoreServerVersion(version)}
