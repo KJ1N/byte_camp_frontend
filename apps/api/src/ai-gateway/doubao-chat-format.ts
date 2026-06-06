@@ -13,6 +13,8 @@ export interface DoubaoChatCompletionsBody {
   stream_options: {
     include_usage: true;
   };
+  thinking: {type: "disabled"};
+  temperature: 0.1;
 }
 
 interface DoubaoStreamChunk {
@@ -46,6 +48,8 @@ export function buildDoubaoChatCompletionsBody(input: {
     stream_options: {
       include_usage: true,
     },
+    thinking: {type: "disabled"},
+    temperature: 0.1
   };
 }
 
@@ -61,7 +65,7 @@ export function parseDoubaoStreamText(rawText: string) {
     .join("");
 }
 
-function parseDoubaoStreamLine(rawLine: string) {
+export function parseDoubaoStreamLine(rawLine: string) {
   const line = rawLine.startsWith("data:") ? rawLine.slice("data:".length).trim() : rawLine;
 
   if (!line || line === "[DONE]") {

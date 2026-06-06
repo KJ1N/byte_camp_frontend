@@ -1,23 +1,33 @@
-import { Injectable, Optional } from "@nestjs/common";
+import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type {
+  AiStreamEvent,
   CreatorInspirationsResponse,
   GeneratedArticleDraft,
   GenerateArticleInput,
+  OptimizeTitlesInput,
   RichTextDocument,
+  RewriteArticleInput,
+  RewriteArticleResponse,
 } from "@bytecamp-aigc/shared";
 import { PromptsService } from "../prompts/prompts.service";
-import { AiProviderClient } from "./ai-provider.client";
+import { AiProviderClient, type AiChatMessage } from "./ai-provider.client";
 import { AiProviderConfigurationException } from "./ai-gateway.errors";
 import {
   ARTICLE_GENERATION_CATEGORY,
   buildArticleGenerationMessages,
+  buildRewriteMessages,
+  buildTitleOptimizationMessages,
   defaultArticleGenerationPrompt,
   parseArticleGenerationJson,
+  parseRewriteJson,
+  parseTitleOptimizationJson,
   type ArticleGenerationPrompt,
 } from "./ai-gateway.prompts";
 
 type ProviderMode = "auto" | "mock" | "live";
+type RewriteModeValue = "POLISH" | "EXPAND" | "SHORTEN" | "CHANGE_STYLE";
+const rewriteModes = new Set(["POLISH", "EXPAND", "SHORTEN", "CHANGE_STYLE"]);
 
 interface ProviderConfig {
   apiKey: string;
@@ -35,13 +45,13 @@ export class AiGatewayService {
     @Optional() private readonly providerClient?: AiProviderClient,
   ) {}
 
-  async generateArticleDraft(input: GenerateArticleInput): Promise<GeneratedArticleDraft> {
+  async generateArticleDraft(input: GenerateArticleInput, userId?: string): Promise<GeneratedArticleDraft> {
     if (!this.shouldUseLiveProvider()) {
       return this.generateMockArticleDraft(input);
     }
 
     const providerConfig = this.getRequiredProviderConfig();
-    const prompt = await this.getArticleGenerationPrompt();
+    const prompt = await this.getArticleGenerationPrompt(input.promptId, userId);
     const completion = await this.getProviderClient().complete({
       ...providerConfig,
       messages: buildArticleGenerationMessages(input, prompt),
@@ -57,28 +67,62 @@ export class AiGatewayService {
     };
   }
 
-  private async generateMockArticleDraft(input: GenerateArticleInput): Promise<GeneratedArticleDraft> {
-    const model = this.getMockModel();
-    const outline = ["趋势背景", "核心机会", "实践方法", "风险与边界", "行动建议"];
-    const bodyText = [
-      `面向${input.audience}，${input.topic}正在从单点工具升级为完整的内容生产链路。`,
-      `在${input.style}风格下，创作者可以先用 AI 形成标题、大纲和正文，再通过人工编辑补充真实案例、观点和表达节奏。`,
-      "真正有价值的创作流程不是把内容完全交给模型，而是让模型负责初稿、改写和校对，让创作者负责判断、取舍和最终表达。",
-      "发布前仍需要经过内容安全审核和质量评分，确保文章既有可读性，也符合平台规则。",
-    ].join("\n\n");
-    const body = this.toRichTextDocument([
-      `围绕「${input.topic}」的创作方向`,
-      ...bodyText.split("\n\n"),
-      "下一步建议：补充一个具体案例，并用更明确的行动建议收束全文。",
-    ]);
+  async *streamArticleDraft(input: GenerateArticleInput, userId: string): AsyncGenerator<AiStreamEvent> {
+    if (this.shouldUseLiveProvider()) {
+      yield* this.streamLiveArticleDraft(input, userId);
+      return;
+    }
 
-    return {
-      model,
-      title: `${input.topic}：创作者需要知道的 5 个变化`,
-      outline,
-      bodyText,
-      body,
+    const article = await this.generateArticleDraft(input, userId);
+
+    yield { event: "meta", data: { model: article.model } };
+    yield { event: "title", data: { text: article.title } };
+    yield { event: "outline", data: { items: article.outline } };
+
+    for (const paragraph of this.paragraphsFromText(article.bodyText)) {
+      yield { event: "body-delta", data: { text: `${paragraph}\n\n` } };
+    }
+
+    yield {
+      event: "done",
+      data: {
+        title: article.title,
+        outline: article.outline,
+        bodyText: article.bodyText,
+        body: article.body,
+      },
     };
+  }
+
+  async *streamTitleOptimization(input: OptimizeTitlesInput): AsyncGenerator<AiStreamEvent> {
+    if (this.shouldUseLiveProvider()) {
+      yield* this.streamLiveTitleOptimization(input);
+      return;
+    }
+
+    const response = await this.optimizeTitles(input);
+
+    yield { event: "meta", data: { model: response.model } };
+    for (const title of response.titles) {
+      yield { event: "title", data: { text: title } };
+    }
+    yield { event: "done", data: { titles: response.titles } };
+  }
+
+  async *streamRewrite(input: RewriteArticleInput): AsyncGenerator<AiStreamEvent> {
+    if (this.shouldUseLiveProvider()) {
+      yield* this.streamLiveRewrite(input);
+      return;
+    }
+
+    const response = await this.rewriteArticle(input);
+
+    yield { event: "meta", data: { model: response.model } };
+    yield { event: "text-delta", data: { text: response.text } };
+    for (const suggestion of response.suggestions) {
+      yield { event: "suggestion", data: { text: suggestion } };
+    }
+    yield { event: "done", data: { text: response.text, suggestions: response.suggestions } };
   }
 
   async generateCreatorInspirations(): Promise<CreatorInspirationsResponse> {
@@ -115,9 +159,228 @@ export class AiGatewayService {
           id: "inspiration-5",
           topic: "AI 生成内容为什么仍然需要人工编辑",
           reason: "容易形成观点型文章，强调创作者判断、取舍和最终表达。",
-          category: "人机协作",
+          category: "人机协同",
         },
       ],
+    };
+  }
+
+  private async optimizeTitles(input: OptimizeTitlesInput) {
+    if (!input.topic?.trim()) {
+      throw new BadRequestException("Topic is required");
+    }
+
+    if (!this.shouldUseLiveProvider()) {
+      return {
+        model: this.getMockModel(),
+        titles: [
+          `${input.topic}: 创作者的效率提升指南`,
+          `从灵感到发布: ${input.topic}的完整链路`,
+          `内容创作者如何看懂${input.topic}`,
+        ],
+      };
+    }
+
+    const providerConfig = this.getRequiredProviderConfig();
+    const completion = await this.getProviderClient().complete({
+      ...providerConfig,
+      messages: buildTitleOptimizationMessages(input),
+    });
+
+    return {
+      model: completion.model,
+      titles: parseTitleOptimizationJson(completion.content).titles,
+    };
+  }
+
+  private async rewriteArticle(input: RewriteArticleInput): Promise<RewriteArticleResponse> {
+    const normalizedInput = this.normalizeRewriteInput(input);
+
+    if (!this.shouldUseLiveProvider()) {
+      return this.rewriteMockArticle(normalizedInput);
+    }
+
+    const providerConfig = this.getRequiredProviderConfig();
+    const completion = await this.getProviderClient().complete({
+      ...providerConfig,
+      messages: buildRewriteMessages(normalizedInput),
+    });
+    const parsed = parseRewriteJson(completion.content);
+
+    return {
+      model: completion.model,
+      text: parsed.text,
+      suggestions: parsed.suggestions,
+    };
+  }
+
+  private async *streamLiveArticleDraft(input: GenerateArticleInput, userId: string): AsyncGenerator<AiStreamEvent> {
+    const providerConfig = this.getRequiredProviderConfig();
+    const prompt = await this.getArticleGenerationPrompt(input.promptId, userId);
+    const stream = this.streamProviderText(providerConfig, buildArticleGenerationMessages(input, prompt));
+    let rawContent = "";
+    let emittedTitle = "";
+    let emittedBodyText = "";
+
+    for await (const delta of stream) {
+      if (!rawContent) {
+        yield { event: "meta", data: { model: delta.model } };
+      }
+
+      rawContent += delta.content;
+
+      const title = extractJsonStringPrefix(rawContent, "title");
+      if (title && title !== emittedTitle) {
+        emittedTitle = title;
+        yield { event: "title", data: { text: title } };
+      }
+
+      const bodyText = extractJsonStringPrefix(rawContent, "bodyText");
+      if (bodyText.length > emittedBodyText.length) {
+        yield { event: "body-delta", data: { text: bodyText.slice(emittedBodyText.length) } };
+        emittedBodyText = bodyText;
+      }
+    }
+
+    const article = parseArticleGenerationJson(rawContent);
+    if (article.bodyText.length > emittedBodyText.length) {
+      yield { event: "body-delta", data: { text: article.bodyText.slice(emittedBodyText.length) } };
+    }
+
+    yield { event: "outline", data: { items: article.outline } };
+    yield {
+      event: "done",
+      data: {
+        title: article.title,
+        outline: article.outline,
+        bodyText: article.bodyText,
+        body: this.toRichTextDocument(this.paragraphsFromText(article.bodyText)),
+      },
+    };
+  }
+
+  private async *streamLiveTitleOptimization(input: OptimizeTitlesInput): AsyncGenerator<AiStreamEvent> {
+    if (!input.topic?.trim()) {
+      throw new BadRequestException("Topic is required");
+    }
+
+    const providerConfig = this.getRequiredProviderConfig();
+    const stream = this.streamProviderText(providerConfig, buildTitleOptimizationMessages(input));
+    let rawContent = "";
+    const emittedTitles: string[] = [];
+
+    for await (const delta of stream) {
+      if (!rawContent) {
+        yield { event: "meta", data: { model: delta.model } };
+      }
+
+      rawContent += delta.content;
+      const titles = extractJsonStringArrayPrefixes(rawContent, "titles");
+
+      for (const title of titles) {
+        if (emittedTitles[title.index] === title.text) continue;
+        emittedTitles[title.index] = title.text;
+        yield {
+          event: "title",
+          data: { text: title.text, index: title.index, partial: !title.closed },
+        };
+      }
+    }
+
+    const titles = parseTitleOptimizationJson(rawContent).titles;
+    for (const [index, title] of titles.entries()) {
+      if (emittedTitles[index] === title) continue;
+      emittedTitles[index] = title;
+      yield { event: "title", data: { text: title, index, partial: false } };
+    }
+    yield { event: "done", data: { titles } };
+  }
+
+  private async *streamLiveRewrite(input: RewriteArticleInput): AsyncGenerator<AiStreamEvent> {
+    const normalizedInput = this.normalizeRewriteInput(input);
+    const providerConfig = this.getRequiredProviderConfig();
+    const stream = this.streamProviderText(providerConfig, buildRewriteMessages(normalizedInput));
+    let rawContent = "";
+    let emittedText = "";
+
+    for await (const delta of stream) {
+      if (!rawContent) {
+        yield { event: "meta", data: { model: delta.model } };
+      }
+
+      rawContent += delta.content;
+      const text = extractJsonStringPrefix(rawContent, "text");
+      if (text.length > emittedText.length) {
+        yield { event: "text-delta", data: { text: text.slice(emittedText.length) } };
+        emittedText = text;
+      }
+    }
+
+    const parsed = parseRewriteJson(rawContent);
+    if (parsed.text.length > emittedText.length) {
+      yield { event: "text-delta", data: { text: parsed.text.slice(emittedText.length) } };
+    }
+
+    for (const suggestion of parsed.suggestions) {
+      yield { event: "suggestion", data: { text: suggestion } };
+    }
+    yield { event: "done", data: { text: parsed.text, suggestions: parsed.suggestions } };
+  }
+
+  private streamProviderText(providerConfig: ProviderConfig, messages: AiChatMessage[]) {
+    return this.getProviderClient().streamText({
+      ...providerConfig,
+      messages,
+    });
+  }
+
+  private normalizeRewriteInput(input: RewriteArticleInput): RewriteArticleInput {
+    const text = input.text?.trim();
+    if (!text) {
+      throw new BadRequestException("Rewrite text is required");
+    }
+    if (text.length > 2000) {
+      throw new BadRequestException("Rewrite text is too long");
+    }
+    if (!rewriteModes.has(input.mode)) {
+      throw new BadRequestException("Rewrite mode is invalid");
+    }
+
+    return { ...input, text };
+  }
+
+  private rewriteMockArticle(input: RewriteArticleInput): RewriteArticleResponse {
+    const prefixByMode: Record<RewriteModeValue, string> = {
+      POLISH: "润色后",
+      EXPAND: "扩写后",
+      SHORTEN: "缩写后",
+      CHANGE_STYLE: `转换为${input.targetStyle || "目标"}风格后`,
+    };
+
+    return {
+      model: this.getMockModel(),
+      text: `${prefixByMode[input.mode as RewriteModeValue]}: ${input.text}`,
+      suggestions: ["补充一个具体案例", "结尾增加行动建议"],
+    };
+  }
+
+  private generateMockArticleDraft(input: GenerateArticleInput): GeneratedArticleDraft {
+    const model = this.getMockModel();
+    const outline = ["趋势背景", "核心机会", "实践方法", "风险边界", "行动建议"];
+    const bodyText = [
+      `面向${input.audience}, ${input.topic}正在从单点工具升级为完整的内容生产链路。`,
+      `在${input.style}风格下, 创作者可以先用 AI 形成标题、大纲和正文, 再通过人工编辑补充真实案例、观点和表达节奏。`,
+      "真正有价值的创作流程不是把内容完全交给模型, 而是让模型负责初稿、改写和校对, 让创作者负责判断、取舍和最终表达。",
+      "发布前仍需要经过内容安全审核和质量评分, 确保文章既有可读性, 也符合平台规则。",
+    ].join("\n\n");
+    const body = this.toRichTextDocument(this.paragraphsFromText(bodyText));
+
+    return {
+      model,
+      title: `${input.topic}: 创作者需要知道的 5 个变化`,
+      outline,
+      bodyText,
+      body,
     };
   }
 
@@ -131,7 +394,14 @@ export class AiGatewayService {
     };
   }
 
-  private async getArticleGenerationPrompt(): Promise<ArticleGenerationPrompt> {
+  private async getArticleGenerationPrompt(promptId: string | undefined, userId: string | undefined): Promise<ArticleGenerationPrompt> {
+    if (promptId) {
+      if (!userId || !this.promptsService) {
+        throw new BadRequestException("Prompt template cannot be used");
+      }
+      return this.promptsService.getUsablePrompt(promptId, userId, ARTICLE_GENERATION_CATEGORY);
+    }
+
     return (
       (await this.promptsService?.getStarterPrompt(ARTICLE_GENERATION_CATEGORY)) ??
       defaultArticleGenerationPrompt
@@ -218,4 +488,126 @@ export class AiGatewayService {
   private isPlaceholder(value: string | undefined) {
     return !value || value.startsWith("replace-with-") || value.includes("your-");
   }
+}
+
+function extractJsonStringPrefix(rawJson: string, fieldName: string) {
+  const quoteIndex = findJsonStringValueStart(rawJson, fieldName);
+  if (quoteIndex < 0) return "";
+
+  return readJsonString(rawJson, quoteIndex).value;
+}
+
+function extractJsonStringArrayValues(rawJson: string, fieldName: string) {
+  return extractJsonStringArrayPrefixes(rawJson, fieldName)
+    .filter((value) => value.closed)
+    .map((value) => value.text);
+}
+
+function extractJsonStringArrayPrefixes(rawJson: string, fieldName: string) {
+  const fieldIndex = findJsonFieldIndex(rawJson, fieldName);
+  if (fieldIndex < 0) return [];
+
+  const colonIndex = rawJson.indexOf(":", fieldIndex);
+  if (colonIndex < 0) return [];
+
+  const arrayStart = skipJsonWhitespace(rawJson, colonIndex + 1);
+  if (rawJson[arrayStart] !== "[") return [];
+
+  const values: Array<{ index: number; text: string; closed: boolean }> = [];
+  let index = arrayStart + 1;
+
+  while (index < rawJson.length) {
+    index = skipJsonWhitespace(rawJson, index);
+    if (rawJson[index] === "]") return values;
+    if (rawJson[index] === ",") {
+      index += 1;
+      continue;
+    }
+    if (rawJson[index] !== '"') return values;
+
+    const value = readJsonString(rawJson, index);
+    values.push({ index: values.length, text: value.value, closed: value.closed });
+    if (!value.closed) return values;
+
+    index = value.endIndex;
+  }
+
+  return values;
+}
+
+function findJsonStringValueStart(rawJson: string, fieldName: string) {
+  const fieldIndex = findJsonFieldIndex(rawJson, fieldName);
+  if (fieldIndex < 0) return -1;
+
+  const colonIndex = rawJson.indexOf(":", fieldIndex);
+  if (colonIndex < 0) return -1;
+
+  const valueStart = skipJsonWhitespace(rawJson, colonIndex + 1);
+  return rawJson[valueStart] === '"' ? valueStart : -1;
+}
+
+function findJsonFieldIndex(rawJson: string, fieldName: string) {
+  return rawJson.indexOf(`"${fieldName}"`);
+}
+
+function skipJsonWhitespace(value: string, startIndex: number) {
+  let index = startIndex;
+  while (index < value.length && /\s/.test(value[index])) {
+    index += 1;
+  }
+  return index;
+}
+
+function readJsonString(rawJson: string, quoteIndex: number) {
+  let value = "";
+  let index = quoteIndex + 1;
+
+  while (index < rawJson.length) {
+    const char = rawJson[index];
+
+    if (char === '"') {
+      return { value, closed: true, endIndex: index + 1 };
+    }
+
+    if (char === "\\") {
+      const escaped = readEscapedJsonCharacter(rawJson, index);
+      if (!escaped) return { value, closed: false, endIndex: index };
+      value += escaped.value;
+      index = escaped.endIndex;
+      continue;
+    }
+
+    value += char;
+    index += 1;
+  }
+
+  return { value, closed: false, endIndex: index };
+}
+
+function readEscapedJsonCharacter(rawJson: string, backslashIndex: number) {
+  const escapeCode = rawJson[backslashIndex + 1];
+  if (!escapeCode) return undefined;
+
+  const simpleEscapes: Record<string, string> = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    b: "\b",
+    f: "\f",
+    n: "\n",
+    r: "\r",
+    t: "\t",
+  };
+
+  if (escapeCode in simpleEscapes) {
+    return { value: simpleEscapes[escapeCode], endIndex: backslashIndex + 2 };
+  }
+
+  if (escapeCode === "u") {
+    const hex = rawJson.slice(backslashIndex + 2, backslashIndex + 6);
+    if (!/^[\da-f]{4}$/i.test(hex)) return undefined;
+    return { value: String.fromCharCode(Number.parseInt(hex, 16)), endIndex: backslashIndex + 6 };
+  }
+
+  return { value: escapeCode, endIndex: backslashIndex + 2 };
 }

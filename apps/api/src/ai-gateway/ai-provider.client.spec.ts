@@ -5,6 +5,52 @@ import { AiProviderClient, getProviderErrorDetail } from "./ai-provider.client";
 const ClientCtor = AiProviderClient as unknown as new (...args: unknown[]) => AiProviderClient;
 
 describe("AiProviderClient", () => {
+  it("yields Doubao delta content before the upstream stream finishes", async () => {
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+    });
+    const client = new ClientCtor(async () => new Response(stream, { status: 200 }));
+
+    controller?.enqueue(
+      encoder.encode('data: {"choices":[{"delta":{"content":"first "},"index":0}]}\n\n'),
+    );
+
+    const iterator = client
+      .streamText({
+        apiKey: "test-key",
+        model: "test-model",
+        messages: [{ role: "user", content: "only JSON" }],
+        timeoutMs: 12_000,
+        maxRetries: 0,
+      })[Symbol.asyncIterator]();
+
+    const first = await iterator.next();
+
+    assert.deepEqual(first, {
+      done: false,
+      value: { model: "test-model", content: "first " },
+    });
+
+    controller?.enqueue(
+      encoder.encode('data: {"choices":[{"delta":{"content":"second"},"index":0}]}\n\n'),
+    );
+    controller?.enqueue(encoder.encode("data: [DONE]\n\n"));
+    controller?.close();
+
+    const second = await iterator.next();
+    const done = await iterator.next();
+
+    assert.deepEqual(second, {
+      done: false,
+      value: { model: "test-model", content: "second" },
+    });
+    assert.deepEqual(done, { done: true, value: undefined });
+  });
+
   it("sends a Doubao streaming chat completions request and joins delta content", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const client = new ClientCtor(async (url: string, init: RequestInit) => {
@@ -41,6 +87,8 @@ describe("AiProviderClient", () => {
       messages: [{ role: "user", content: "只返回 JSON" }],
       stream: true,
       stream_options: { include_usage: true },
+      thinking: { type: "disabled" },
+      temperature: 0.1,
     });
   });
 
@@ -66,10 +114,14 @@ describe("AiProviderClient", () => {
   });
 
   it("maps provider response read timeouts to a gateway timeout error", async () => {
-    const response = new Response("", { status: 200 });
-    response.text = async () => {
-      throw new DOMException("The operation was aborted.", "AbortError");
-    };
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        },
+      }),
+      { status: 200 },
+    );
     const client = new ClientCtor(async () => response);
 
     await assert.rejects(

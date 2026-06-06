@@ -38,6 +38,77 @@ async function main() {
     },
   });
 
+  const platformPrompts = [
+    {
+      id: "platform-method-starter",
+      name: "方法论图文生成",
+      category: "article_generation",
+      description: "适合步骤清晰、可操作的经验方法类内容。",
+      systemPrompt: "你是擅长方法论写作的中文内容创作助手，输出结构清晰、步骤明确、适合图文平台发布的文章初稿。",
+      userTemplate: "请围绕主题 {{topic}}，面向 {{audience}}，使用 {{style}} 风格，生成包含标题、大纲和正文的方法论图文。",
+    },
+    {
+      id: "platform-seeding-starter",
+      name: "种草图文生成",
+      category: "article_generation",
+      description: "适合生活方式、工具体验和产品推荐类内容。",
+      systemPrompt: "你是擅长种草图文的中文内容创作助手，输出真实克制、体验感明确、避免夸大承诺的文章初稿。",
+      userTemplate: "请围绕主题 {{topic}}，面向 {{audience}}，使用 {{style}} 风格，生成包含标题、大纲和正文的种草图文。",
+    },
+    {
+      id: "platform-title-optimizer",
+      name: "标题优化",
+      category: "title_optimization",
+      description: "根据主题、受众、风格和正文摘要生成多个标题候选。",
+      systemPrompt: "你是中文图文标题优化助手，擅长生成清晰、具体、不夸张的标题候选。",
+      userTemplate: "请基于主题 {{topic}}，面向 {{audience}}，使用 {{style}} 风格优化标题。",
+    },
+    {
+      id: "platform-article-rewrite",
+      name: "正文改写",
+      category: "article_rewrite",
+      description: "支持润色、扩写、缩写和风格转换。",
+      systemPrompt: "你是中文正文改写助手，擅长在保持事实边界的前提下改进表达。",
+      userTemplate: "请根据用户选择的改写模式处理正文片段。",
+    },
+  ];
+
+  for (const prompt of platformPrompts) {
+    await prisma.prompt.upsert({
+      where: { id: prompt.id },
+      update: {
+        name: prompt.name,
+        category: prompt.category,
+        systemPrompt: prompt.systemPrompt,
+        userTemplate: prompt.userTemplate,
+        paramsSchema: {
+          topic: "string",
+          audience: "string",
+          style: "string",
+          description: prompt.description,
+        },
+        fewShots: [],
+        isStarter: false,
+      },
+      create: {
+        id: prompt.id,
+        owner: "PLATFORM",
+        name: prompt.name,
+        category: prompt.category,
+        systemPrompt: prompt.systemPrompt,
+        userTemplate: prompt.userTemplate,
+        paramsSchema: {
+          topic: "string",
+          audience: "string",
+          style: "string",
+          description: prompt.description,
+        },
+        fewShots: [],
+        isStarter: false,
+      },
+    });
+  }
+
   await prisma.draft.upsert({
     where: { id: "demo-draft-001" },
     update: {},

@@ -71,6 +71,7 @@ export interface GenerateArticleInput {
   topic: string;
   audience: string;
   style: string;
+  promptId?: string;
 }
 
 export interface GeneratedArticleDraft {
@@ -92,6 +93,63 @@ export interface CreatorInspirationsResponse {
   model: string;
   items: CreatorInspiration[];
 }
+
+export interface PromptTemplateSummary {
+  id: string;
+  name: string;
+  category: string;
+  owner: PromptOwner;
+  isStarter: boolean;
+  description?: string;
+}
+
+export interface ListPromptsResponse {
+  items: PromptTemplateSummary[];
+}
+
+export interface OptimizeTitlesInput {
+  topic: string;
+  audience: string;
+  style: string;
+  currentTitle?: string;
+  bodyText?: string;
+}
+
+export interface OptimizeTitlesResponse {
+  model: string;
+  titles: string[];
+}
+
+export enum RewriteMode {
+  Polish = "POLISH",
+  Expand = "EXPAND",
+  Shorten = "SHORTEN",
+  ChangeStyle = "CHANGE_STYLE",
+}
+
+export interface RewriteArticleInput {
+  text: string;
+  mode: RewriteMode;
+  targetStyle?: string;
+  topic?: string;
+  audience?: string;
+}
+
+export interface RewriteArticleResponse {
+  model: string;
+  text: string;
+  suggestions: string[];
+}
+
+export type AiStreamEvent =
+  | { event: "meta"; data: { model: string } }
+  | { event: "title"; data: { text: string; index?: number; partial?: boolean } }
+  | { event: "outline"; data: { items: string[] } }
+  | { event: "body-delta"; data: { text: string } }
+  | { event: "text-delta"; data: { text: string } }
+  | { event: "suggestion"; data: { text: string } }
+  | { event: "done"; data: Record<string, unknown> }
+  | { event: "error"; data: { message: string } };
 
 export interface CreateDraftInput {
   title: string;

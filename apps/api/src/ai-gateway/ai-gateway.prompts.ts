@@ -1,8 +1,10 @@
-import type { GenerateArticleInput } from "@bytecamp-aigc/shared";
+import type { GenerateArticleInput, OptimizeTitlesInput, RewriteArticleInput } from "@bytecamp-aigc/shared";
 import type { AiChatMessage } from "./ai-provider.client";
 import { AiProviderBadOutputException } from "./ai-gateway.errors";
 
 export const ARTICLE_GENERATION_CATEGORY = "article_generation";
+export const TITLE_OPTIMIZATION_CATEGORY = "title_optimization";
+export const ARTICLE_REWRITE_CATEGORY = "article_rewrite";
 
 export interface ArticleGenerationPrompt {
   systemPrompt: string;
@@ -15,10 +17,19 @@ export interface ParsedArticleGeneration {
   bodyText: string;
 }
 
+export interface ParsedTitleOptimization {
+  titles: string[];
+}
+
+export interface ParsedRewrite {
+  text: string;
+  suggestions: string[];
+}
+
 export const defaultArticleGenerationPrompt: ArticleGenerationPrompt = {
   systemPrompt:
-    "你是 AI Creator Hub 的中文内容创作助手，擅长生成结构清晰、信息密度高、适合图文平台分发的文章初稿。",
-  userTemplate: "请围绕主题 {{topic}}，面向 {{audience}}，用 {{style}} 风格生成标题、大纲和正文。",
+    "You are AI Creator Hub's Chinese article assistant. Generate clear, useful, platform-ready article drafts.",
+  userTemplate: "Topic: {{topic}}\nAudience: {{audience}}\nStyle: {{style}}\nGenerate a title, outline, and article body.",
 };
 
 export function buildArticleGenerationMessages(
@@ -30,45 +41,87 @@ export function buildArticleGenerationMessages(
       role: "system",
       content: `${prompt.systemPrompt}
 
-你必须只返回 JSON object，不要返回 Markdown 代码块、解释文字或额外前后缀。JSON 字段固定为：
+Return only a JSON object. Do not return Markdown fences or extra commentary. Use this schema:
 {
-  "title": "文章标题",
-  "outline": ["大纲要点 1", "大纲要点 2"],
-  "bodyText": "正文纯文本，段落之间使用两个换行分隔"
-}
-注意：bodyText 必须是合法 JSON 字符串，段落换行请写成 \\n\\n，不要在字符串内部直接写真实换行。`,
+  "title": "article title",
+  "outline": ["outline item 1", "outline item 2"],
+  "bodyText": "plain text body, paragraphs separated by \\n\\n"
+}`,
     },
     {
       role: "user",
       content: `${renderPromptTemplate(prompt.userTemplate, input)}
 
-补充要求：
-- 文章使用简体中文。
-- 标题控制在 16 到 32 个汉字附近。
-- 大纲 4 到 6 条。
-- 正文至少 4 段，适合保存为草稿后继续编辑。
-- 不要编造具体数据来源。`,
+Requirements:
+- Use Simplified Chinese unless the user topic requires another language.
+- Keep the title concise and suitable for a creator publishing workflow.
+- Return 4 to 6 outline items.
+- Return at least 4 body paragraphs.
+- Avoid inventing precise data sources.`,
+    },
+  ];
+}
+
+export function buildTitleOptimizationMessages(input: OptimizeTitlesInput): AiChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `You are a Chinese title optimization assistant.
+
+Return only JSON:
+{
+  "titles": ["title 1", "title 2", "title 3"]
+}`,
+    },
+    {
+      role: "user",
+      content: `Topic: ${input.topic}
+Audience: ${input.audience}
+Style: ${input.style}
+Current title: ${input.currentTitle ?? ""}
+Body context: ${input.bodyText ?? ""}
+
+Generate 3 concise, specific, non-duplicate title candidates.`,
+    },
+  ];
+}
+
+export function buildRewriteMessages(input: RewriteArticleInput): AiChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `You are a Chinese article rewrite assistant.
+
+Return only JSON:
+{
+  "text": "rewritten text",
+  "suggestions": ["suggestion 1", "suggestion 2"]
+}`,
+    },
+    {
+      role: "user",
+      content: `Mode: ${input.mode}
+Target style: ${input.targetStyle ?? ""}
+Topic: ${input.topic ?? ""}
+Audience: ${input.audience ?? ""}
+Text:
+${input.text}
+
+Mode rules:
+- POLISH: improve clarity, rhythm, and wording without changing meaning.
+- EXPAND: add useful detail and examples.
+- SHORTEN: make the text shorter while keeping the key point.
+- CHANGE_STYLE: rewrite toward the target style.`,
     },
   ];
 }
 
 export function parseArticleGenerationJson(rawContent: string): ParsedArticleGeneration {
-  const jsonText = extractJsonObject(rawContent);
-  const value = parseModelJson(jsonText);
-
-  if (!value || typeof value !== "object") {
-    throw new AiProviderBadOutputException();
-  }
-
-  const record = value as Record<string, unknown>;
-  const title = typeof record.title === "string" ? record.title.trim() : "";
-  const bodyText = typeof record.bodyText === "string" ? record.bodyText.trim() : "";
-  const outline = Array.isArray(record.outline)
-    ? record.outline
-        .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
-        .filter(Boolean)
-    : [];
+  const value = parseJsonObject(rawContent);
+  const record = asRecord(value);
+  const title = readString(record.title);
+  const bodyText = readString(record.bodyText);
+  const outline = readStringArray(record.outline);
 
   if (!title || !bodyText || outline.length === 0) {
     throw new AiProviderBadOutputException();
@@ -77,7 +130,33 @@ export function parseArticleGenerationJson(rawContent: string): ParsedArticleGen
   return { title, outline, bodyText };
 }
 
-function parseModelJson(jsonText: string): unknown {
+export function parseTitleOptimizationJson(rawContent: string): ParsedTitleOptimization {
+  const value = parseJsonObject(rawContent);
+  const titles = unique(readStringArray(asRecord(value).titles));
+
+  if (titles.length === 0) {
+    throw new AiProviderBadOutputException();
+  }
+
+  return { titles };
+}
+
+export function parseRewriteJson(rawContent: string): ParsedRewrite {
+  const value = parseJsonObject(rawContent);
+  const record = asRecord(value);
+  const text = readString(record.text);
+  const suggestions = readStringArray(record.suggestions);
+
+  if (!text) {
+    throw new AiProviderBadOutputException();
+  }
+
+  return { text, suggestions };
+}
+
+function parseJsonObject(rawContent: string): unknown {
+  const jsonText = extractJsonObject(rawContent);
+
   try {
     return JSON.parse(jsonText);
   } catch {
@@ -89,6 +168,31 @@ function parseModelJson(jsonText: string): unknown {
   }
 }
 
+function asRecord(value: unknown) {
+  if (!value || typeof value !== "object") {
+    throw new AiProviderBadOutputException();
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function unique(values: string[]) {
+  return [...new Set(values)];
+}
+
 function escapeControlCharactersInsideJsonStrings(jsonText: string) {
   let result = "";
   let inString = false;
@@ -98,9 +202,7 @@ function escapeControlCharactersInsideJsonStrings(jsonText: string) {
     const char = jsonText[index];
 
     if (!inString) {
-      if (char === '"') {
-        inString = true;
-      }
+      if (char === '"') inString = true;
       result += char;
       continue;
     }
@@ -125,9 +227,7 @@ function escapeControlCharactersInsideJsonStrings(jsonText: string) {
 
     if (char === "\r") {
       result += "\\n";
-      if (jsonText[index + 1] === "\n") {
-        index += 1;
-      }
+      if (jsonText[index + 1] === "\n") index += 1;
       continue;
     }
 

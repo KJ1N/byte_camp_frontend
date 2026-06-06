@@ -40,6 +40,8 @@ describe("doubao chat format", () => {
         stream_options: {
           include_usage: true,
         },
+        thinking: { type: "disabled" },
+        temperature: 0.1,
       },
     );
   });

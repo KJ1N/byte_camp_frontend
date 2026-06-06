@@ -11,6 +11,7 @@ import type {
   RichTextNode,
 } from "@bytecamp-aigc/shared";
 
+import { AiWritingAssistant } from "@/components/ai-writing-assistant";
 import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
@@ -19,6 +20,11 @@ import {
   readDraftOfflineState,
   writeDraftOfflineState,
 } from "@/lib/draft-offline-state";
+import {
+  appendPlainTextParagraph,
+  plainTextFromRichText,
+  replaceWithPlainText,
+} from "@/lib/rich-text-document";
 
 const emptyDoc: RichTextDocument = {
   type: "doc",
@@ -64,7 +70,8 @@ export default function DraftEditorPage() {
   const [restoreMessage, setRestoreMessage] = useState("");
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
 
-  const wordCount = useMemo(() => textFromDoc(body).length, [body]);
+  const bodyText = useMemo(() => plainTextFromRichText(body), [body]);
+  const wordCount = useMemo(() => bodyText.length, [bodyText]);
   const canPublish = Boolean(
     draft && !dirty && !hasRecovery && !restoringVersionId && status !== "saving" && status !== "loading",
   );
@@ -182,6 +189,16 @@ export default function DraftEditorPage() {
   function updateBody(nextBody: RichTextDocument) {
     setBody(nextBody);
     setDirty(true);
+  }
+
+  function replaceDraftBody(text: string) {
+    if (!text.trim()) return;
+    updateBody(replaceWithPlainText(text));
+  }
+
+  function appendDraftBody(text: string) {
+    if (!text.trim()) return;
+    updateBody(appendPlainTextParagraph(body, text));
   }
 
   function restoreOfflineDraft() {
@@ -365,7 +382,7 @@ export default function DraftEditorPage() {
           </div>
         </section>
 
-        <aside className="h-fit min-h-[calc(100vh-8rem)] bg-[#fbfdff] px-6 py-8 lg:sticky lg:top-20">
+        <aside className="hidden">
           <div className="mb-8 flex items-center justify-center gap-3">
             <span className="h-6 w-6 rounded-md bg-gradient-to-br from-[#ff5f62] to-[#8c7bff]" />
             <h2 className="text-lg font-semibold">头条创作助手</h2>
@@ -469,6 +486,70 @@ export default function DraftEditorPage() {
             </div>
           </div>
         </aside>
+        <AiWritingAssistant
+          authToken={token}
+          topic={title || draft?.title || "草稿编辑"}
+          audience="内容创作者"
+          style="头条资讯"
+          currentTitle={title}
+          bodyText={bodyText}
+          previewTitle={title}
+          previewBodyText={bodyText}
+          onSelectTitle={updateTitle}
+          onReplaceBody={replaceDraftBody}
+          onAppendBody={appendDraftBody}
+          footer={
+            <>
+              {restoreMessage ? (
+                <div className="rounded-md border border-[#d8ead8] bg-[#f5fbf5] px-4 py-3 text-sm text-[#2f6b37]">
+                  {restoreMessage}
+                </div>
+              ) : null}
+              <div className="border-t border-[#eeeeee] pt-5">
+                <div className="mb-3 text-sm font-semibold text-[#4e5661]">版本记录</div>
+                <div className="grid gap-2">
+                  {versions.map((version) => (
+                    <div
+                      className={[
+                        "rounded-md border bg-white px-3 py-2 text-sm transition",
+                        selectedVersionId === version.id ? "border-[#ffb2b3]" : "border-[#eeeeee]",
+                      ].join(" ")}
+                      key={version.id}
+                    >
+                      <button
+                        className="w-full cursor-pointer text-left"
+                        type="button"
+                        onClick={() => setSelectedVersionId(selectedVersionId === version.id ? null : version.id)}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-medium text-[#1f2329]">v{version.version}</div>
+                          <div className="text-xs text-[#8f959e]">{formatTime(version.createdAt)}</div>
+                        </div>
+                        <div className="mt-1 truncate text-xs text-[#6b7280]">{version.title}</div>
+                      </button>
+                      {selectedVersionId === version.id ? (
+                        <div className="mt-3 border-t border-[#f0f0f0] pt-3">
+                          <p className="max-h-24 overflow-hidden text-xs leading-6 text-[#6b7280]">
+                            {textFromDoc(version.snapshot) || "该版本暂无正文内容"}
+                          </p>
+                          <button
+                            className="mt-3 cursor-pointer rounded-md bg-[#fff1f1] px-3 py-2 text-xs font-semibold text-[#ff4d4f] disabled:text-[#d6a4a5]"
+                            disabled={Boolean(restoringVersionId)}
+                            type="button"
+                            onClick={() => void restoreServerVersion(version)}
+                          >
+                            {restoringVersionId === version.id ? "恢复中..." : "恢复此版本"}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                  {!versions.length ? <div className="text-sm text-[#8f959e]">暂无版本记录</div> : null}
+                </div>
+              </div>
+            </>
+          }
+        />
       </div>
     </main>
   );

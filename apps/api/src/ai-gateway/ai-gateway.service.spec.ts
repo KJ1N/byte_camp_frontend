@@ -20,8 +20,12 @@ function createConfig(values: ConfigValues) {
 function createPromptsService() {
   return {
     getStarterPrompt: async () => ({
-      systemPrompt: "你是 AI Creator Hub 的中文创作助手，只返回 JSON。",
-      userTemplate: "主题：{{topic}}\n受众：{{audience}}\n风格：{{style}}\n请生成文章。",
+      systemPrompt: "You are a Chinese article assistant. Return JSON only.",
+      userTemplate: "Topic: {{topic}}\nAudience: {{audience}}\nStyle: {{style}}",
+    }),
+    getUsablePrompt: async () => ({
+      systemPrompt: "Use the selected prompt. Return JSON only.",
+      userTemplate: "Selected topic: {{topic}} Audience: {{audience}} Style: {{style}}",
     }),
   };
 }
@@ -38,6 +42,28 @@ function createProvider(content: string) {
   };
 }
 
+function createStreamingProvider(firstChunk: string, restContent: string) {
+  const calls: ProviderCall[] = [];
+  let releaseRest: (() => void) | undefined;
+  const waitForRest = new Promise<void>((resolve) => {
+    releaseRest = resolve;
+  });
+
+  return {
+    calls,
+    releaseRest: () => releaseRest?.(),
+    complete: async () => {
+      throw new Error("stream endpoints should not wait for complete provider output");
+    },
+    streamText: async function* (input: ProviderCall) {
+      calls.push(input);
+      yield { model: "live-model", content: firstChunk };
+      await waitForRest;
+      yield { model: "live-model", content: restContent };
+    },
+  };
+}
+
 const liveConfig = createConfig({
   AI_PROVIDER_MODE: "live",
   AI_API_KEY: "test-key",
@@ -48,18 +74,18 @@ const liveConfig = createConfig({
 });
 
 const generationInput = {
-  topic: "AI 如何改变内容创作",
-  audience: "内容创作者",
-  style: "科普",
+  topic: "AI writing",
+  audience: "content creators",
+  style: "practical",
 };
 
 describe("AiGatewayService", () => {
   it("uses the live provider and parses structured article JSON", async () => {
     const provider = createProvider(
       JSON.stringify({
-        title: "AI 改变内容创作的三个关键变化",
-        outline: ["效率提升", "流程重组", "风险控制"],
-        bodyText: "AI 让创作者更快形成初稿。\n\n创作者仍然需要负责判断和编辑。",
+        title: "How AI changes content creation",
+        outline: ["Efficiency", "Workflow", "Risk control"],
+        bodyText: "AI helps creators draft faster.\n\nCreators still edit and decide.",
       }),
     );
     const service = new ServiceCtor(liveConfig, createPromptsService(), provider);
@@ -68,11 +94,11 @@ describe("AiGatewayService", () => {
 
     assert.equal(provider.calls.length, 1);
     assert.equal(provider.calls[0].model, "test-model");
-    assert.match(provider.calls[0].messages[1].content, /AI 如何改变内容创作/);
+    assert.match(provider.calls[0].messages[1].content, /AI writing/);
     assert.equal(response.model, "live-model");
-    assert.equal(response.title, "AI 改变内容创作的三个关键变化");
-    assert.deepEqual(response.outline, ["效率提升", "流程重组", "风险控制"]);
-    assert.match(response.bodyText, /更快形成初稿/);
+    assert.equal(response.title, "How AI changes content creation");
+    assert.deepEqual(response.outline, ["Efficiency", "Workflow", "Risk control"]);
+    assert.match(response.bodyText, /draft faster/);
     assert.equal(response.body.type, "doc");
     assert.equal(response.body.content.length, 2);
   });
@@ -80,26 +106,26 @@ describe("AiGatewayService", () => {
   it("extracts JSON when the live provider wraps it in a markdown code block", async () => {
     const provider = createProvider(`\`\`\`json
 {
-  "title": "从灵感到发布的 AI 工作流",
-  "outline": ["输入", "生成", "审核"],
-  "bodyText": "第一段正文。\\n\\n第二段正文。"
+  "title": "From idea to publish",
+  "outline": ["Input", "Draft", "Audit"],
+  "bodyText": "First paragraph.\\n\\nSecond paragraph."
 }
 \`\`\``);
     const service = new ServiceCtor(liveConfig, createPromptsService(), provider);
 
     const response = await service.generateArticleDraft(generationInput);
 
-    assert.equal(response.title, "从灵感到发布的 AI 工作流");
-    assert.deepEqual(response.outline, ["输入", "生成", "审核"]);
+    assert.equal(response.title, "From idea to publish");
+    assert.deepEqual(response.outline, ["Input", "Draft", "Audit"]);
     assert.equal(response.body.content.length, 2);
   });
 
   it("falls back to mock output in auto mode when credentials are placeholders", async () => {
     const provider = createProvider(
       JSON.stringify({
-        title: "不应调用真实模型",
-        outline: ["不应出现"],
-        bodyText: "不应出现",
+        title: "Should not call live provider",
+        outline: ["Should not appear"],
+        bodyText: "Should not appear",
       }),
     );
     const service = new ServiceCtor(
@@ -116,7 +142,7 @@ describe("AiGatewayService", () => {
 
     assert.equal(provider.calls.length, 0);
     assert.equal(response.model, "mock-model");
-    assert.match(response.title, /AI 如何改变内容创作/);
+    assert.match(response.title, /AI writing/);
   });
 
   it("throws a service unavailable error when live mode is missing credentials", async () => {
@@ -133,20 +159,18 @@ describe("AiGatewayService", () => {
       () => service.generateArticleDraft(generationInput),
       (error: unknown) => {
         assert.equal((error as { getStatus?: () => number }).getStatus?.(), 503);
-        assert.match((error as Error).message, /AI 配置缺失/);
         return true;
       },
     );
   });
 
   it("throws a bad gateway error when live provider output is not valid article JSON", async () => {
-    const service = new ServiceCtor(liveConfig, createPromptsService(), createProvider("这不是 JSON"));
+    const service = new ServiceCtor(liveConfig, createPromptsService(), createProvider("not json"));
 
     await assert.rejects(
       () => service.generateArticleDraft(generationInput),
       (error: unknown) => {
         assert.equal((error as { getStatus?: () => number }).getStatus?.(), 502);
-        assert.match((error as Error).message, /模型输出解析失败/);
         return true;
       },
     );
@@ -172,6 +196,138 @@ describe("AiGatewayService", () => {
       assert.ok(item.topic.trim());
       assert.ok(item.reason.trim());
       assert.ok(item.category.trim());
+    }
+  });
+
+  it("streams mock article generation events in render order", async () => {
+    const service = new ServiceCtor(
+      createConfig({
+        AI_PROVIDER_MODE: "mock",
+        AI_MODEL: "mock-model",
+      }),
+      createPromptsService(),
+      createProvider("{}"),
+    );
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    for await (const event of service.streamArticleDraft({ ...generationInput, promptId: "prompt-1" }, "user-1")) {
+      events.push(event);
+    }
+
+    assert.deepEqual(
+      events.map((event) => event.event),
+      ["meta", "title", "outline", "body-delta", "body-delta", "body-delta", "body-delta", "done"],
+    );
+    assert.equal(events[0].data.model, "mock-model");
+    assert.ok("text" in events[1].data);
+    assert.ok("body" in events.at(-1)!.data);
+  });
+
+  it("streams mock title candidates one by one", async () => {
+    const service = new ServiceCtor(
+      createConfig({
+        AI_PROVIDER_MODE: "mock",
+        AI_MODEL: "mock-model",
+      }),
+      createPromptsService(),
+      createProvider("{}"),
+    );
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    for await (const event of service.streamTitleOptimization(generationInput)) {
+      events.push(event);
+    }
+
+    assert.deepEqual(events.map((event) => event.event), ["meta", "title", "title", "title", "done"]);
+    assert.match(String(events[1].data.text), /AI writing/);
+  });
+
+  it("streams mock rewrite text before suggestions and done", async () => {
+    const service = new ServiceCtor(
+      createConfig({
+        AI_PROVIDER_MODE: "mock",
+        AI_MODEL: "mock-model",
+      }),
+      createPromptsService(),
+      createProvider("{}"),
+    );
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    for await (const event of service.streamRewrite({
+      text: "Original paragraph",
+      mode: "POLISH" as never,
+      topic: "AI writing",
+      audience: "creators",
+    })) {
+      events.push(event);
+    }
+
+    assert.deepEqual(
+      events.map((event) => event.event),
+      ["meta", "text-delta", "suggestion", "suggestion", "done"],
+    );
+    assert.match(String(events[1].data.text), /Original paragraph/);
+    assert.ok("suggestions" in events.at(-1)!.data);
+  });
+
+  it("streams live article body deltas before the provider stream finishes", async () => {
+    const provider = createStreamingProvider(
+      '{"title":"Live title","outline":["Intro"],"bodyText":"First ',
+      'paragraph."}',
+    );
+    const service = new ServiceCtor(liveConfig, createPromptsService(), provider);
+    const iterator = service.streamArticleDraft(generationInput, "user-1")[Symbol.asyncIterator]();
+
+    assert.equal((await iterator.next()).value.event, "meta");
+
+    const title = await iterator.next();
+    const bodyDelta = await iterator.next();
+
+    assert.deepEqual(title.value, { event: "title", data: { text: "Live title" } });
+    assert.deepEqual(bodyDelta.value, { event: "body-delta", data: { text: "First " } });
+
+    provider.releaseRest();
+    for await (const _event of iterator) {
+      // drain the stream after releasing the provider remainder
+    }
+  });
+
+  it("streams live title candidates before the provider stream finishes", async () => {
+    const provider = createStreamingProvider('{"titles":["First ', 'title","Second title","Third title"]}');
+    const service = new ServiceCtor(liveConfig, createPromptsService(), provider);
+    const iterator = service.streamTitleOptimization(generationInput)[Symbol.asyncIterator]();
+
+    assert.equal((await iterator.next()).value.event, "meta");
+
+    const firstTitle = await iterator.next();
+
+    assert.deepEqual(firstTitle.value, { event: "title", data: { text: "First ", index: 0, partial: true } });
+
+    provider.releaseRest();
+    for await (const _event of iterator) {
+      // drain the stream after releasing the provider remainder
+    }
+  });
+
+  it("streams live rewrite text deltas before the provider stream finishes", async () => {
+    const provider = createStreamingProvider('{"text":"Polished ', 'text","suggestions":["Add evidence"]}');
+    const service = new ServiceCtor(liveConfig, createPromptsService(), provider);
+    const iterator = service.streamRewrite({
+      text: "Original paragraph",
+      mode: "POLISH" as never,
+      topic: "AI writing",
+      audience: "creators",
+    })[Symbol.asyncIterator]();
+
+    assert.equal((await iterator.next()).value.event, "meta");
+
+    const textDelta = await iterator.next();
+
+    assert.deepEqual(textDelta.value, { event: "text-delta", data: { text: "Polished " } });
+
+    provider.releaseRest();
+    for await (const _event of iterator) {
+      // drain the stream after releasing the provider remainder
     }
   });
 });

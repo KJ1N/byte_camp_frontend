@@ -8,6 +8,7 @@ import {
 import {
   buildDoubaoChatCompletionsBody,
   getDoubaoChatCompletionsUrl,
+  parseDoubaoStreamLine,
   parseDoubaoStreamText,
   type DoubaoChatMessage,
 } from "./doubao-chat-format";
@@ -28,6 +29,11 @@ export interface AiProviderCompleteResponse {
   content: string;
 }
 
+export interface AiProviderTextDelta {
+  model: string;
+  content: string;
+}
+
 export type DoubaoFetch = (url: string, init: RequestInit) => Promise<Response>;
 export const DOUBAO_FETCH = Symbol("DOUBAO_FETCH");
 
@@ -40,11 +46,29 @@ export class AiProviderClient {
   ) {}
 
   async complete(input: AiProviderCompleteInput): Promise<AiProviderCompleteResponse> {
+    let content = "";
+
+    for await (const delta of this.streamText(input)) {
+      content += delta.content;
+    }
+
+    if (!content.trim()) {
+      throw new AiProviderBadOutputException("Model output is empty. Please try again.");
+    }
+
+    return {
+      model: input.model,
+      content: content.trim(),
+    };
+  }
+
+  async *streamText(input: AiProviderCompleteInput): AsyncGenerator<AiProviderTextDelta> {
     let attempt = 0;
 
     while (true) {
       try {
-        return await this.completeOnce(input);
+        yield* this.streamTextOnce(input);
+        return;
       } catch (error) {
         if (error instanceof AiProviderBadOutputException) throw error;
         if (error instanceof AiProviderTimeoutException) throw error;
@@ -55,24 +79,67 @@ export class AiProviderClient {
     }
   }
 
-  private async completeOnce(input: AiProviderCompleteInput): Promise<AiProviderCompleteResponse> {
+  private async *streamTextOnce(input: AiProviderCompleteInput): AsyncGenerator<AiProviderTextDelta> {
     const response = await this.sendRequest(input);
 
     if (!response.ok) {
       throw new AiProviderUnavailableException(await getProviderErrorDetailFromResponse(response));
     }
 
-    const rawContent = await this.readResponseText(response);
-    const content = this.parseResponseText(rawContent);
+    if (!response.body) {
+      const rawContent = await this.readResponseText(response);
+      const content = this.parseResponseText(rawContent);
 
-    if (!content) {
-      throw new AiProviderBadOutputException("模型输出为空，请稍后重试。");
+      if (content) {
+        yield { model: input.model, content };
+      }
+      return;
     }
 
-    return {
-      model: input.model,
-      content,
-    };
+    yield* this.readResponseStream(response.body, input.model);
+  }
+
+  private async *readResponseStream(
+    body: ReadableStream<Uint8Array>,
+    model: string,
+  ): AsyncGenerator<AiProviderTextDelta> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const content = this.parseResponseLine(line.trim());
+          if (content) {
+            yield { model, content };
+          }
+        }
+      }
+
+      buffer += decoder.decode();
+      const tail = buffer.trim();
+      if (tail) {
+        const content = this.parseResponseLine(tail);
+        if (content) {
+          yield { model, content };
+        }
+      }
+    } catch (error) {
+      if (isTimeoutError(error)) throw new AiProviderTimeoutException();
+      if (error instanceof AiProviderBadOutputException) throw error;
+      throw new AiProviderUnavailableException(getProviderErrorDetail(error));
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   private async readResponseText(response: Response) {
@@ -87,6 +154,16 @@ export class AiProviderClient {
   private parseResponseText(rawContent: string) {
     try {
       return parseDoubaoStreamText(rawContent).trim();
+    } catch {
+      throw new AiProviderBadOutputException();
+    }
+  }
+
+  private parseResponseLine(line: string) {
+    if (!line) return undefined;
+
+    try {
+      return parseDoubaoStreamLine(line);
     } catch {
       throw new AiProviderBadOutputException();
     }

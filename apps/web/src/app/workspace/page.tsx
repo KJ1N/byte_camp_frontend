@@ -3,13 +3,38 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import type { DraftSummary, GeneratedArticleDraft, RichTextDocument } from "@bytecamp-aigc/shared";
+import type {
+  DraftSummary,
+  GeneratedArticleDraft,
+  ListPromptsResponse,
+  PromptTemplateSummary,
+  RichTextDocument,
+} from "@bytecamp-aigc/shared";
 
+import { AiWritingAssistant } from "@/components/ai-writing-assistant";
+import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
+import { createAiSseParser, mergeTitleCandidate } from "@/lib/ai-stream";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
+import {
+  appendPlainTextParagraph,
+  plainTextFromRichText,
+  replaceWithPlainText,
+} from "@/lib/rich-text-document";
 import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
 
-const styleOptions = ["科普", "新闻", "轻松", "严肃", "种草"];
+const styleOptions = ["科普", "新闻", "轻松", "严谨", "种草"];
+const rewriteModes = [
+  { value: "POLISH", label: "润色" },
+  { value: "EXPAND", label: "扩写" },
+  { value: "SHORTEN", label: "缩写" },
+  { value: "CHANGE_STYLE", label: "换风格" },
+] as const;
+
+type RewriteModeValue = (typeof rewriteModes)[number]["value"];
+type WorkbenchStatus = "loading" | "idle" | "streaming" | "saving";
+type StreamStatus = "idle" | "streaming" | "error";
+
 const defaultTopic = "AI 如何改变内容创作";
 
 const emptyDoc: RichTextDocument = {
@@ -24,6 +49,16 @@ function textFromDoc(doc: RichTextDocument) {
     .join("");
 }
 
+function createEmptyGenerated(model = "streaming"): GeneratedArticleDraft {
+  return {
+    model,
+    title: "",
+    outline: [],
+    bodyText: "",
+    body: emptyDoc,
+  };
+}
+
 export default function WorkspacePage() {
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
@@ -31,10 +66,20 @@ export default function WorkspacePage() {
   const [topic, setTopic] = useState(defaultTopic);
   const [audience, setAudience] = useState("内容创作者");
   const [style, setStyle] = useState("科普");
+  const [prompts, setPrompts] = useState<PromptTemplateSummary[]>([]);
+  const [selectedPromptId, setSelectedPromptId] = useState("");
+  const [promptsLoading, setPromptsLoading] = useState(false);
   const [generated, setGenerated] = useState<GeneratedArticleDraft | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
-  const [status, setStatus] = useState<"idle" | "loading" | "generating" | "saving">("loading");
+  const [status, setStatus] = useState<WorkbenchStatus>("loading");
+  const [titleStatus, setTitleStatus] = useState<StreamStatus>("idle");
+  const [rewriteStatus, setRewriteStatus] = useState<StreamStatus>("idle");
+  const [titleCandidates, setTitleCandidates] = useState<string[]>([]);
+  const [rewriteMode, setRewriteMode] = useState<RewriteModeValue>("POLISH");
+  const [rewriteInput, setRewriteInput] = useState("");
+  const [rewriteResult, setRewriteResult] = useState("");
+  const [rewriteSuggestions, setRewriteSuggestions] = useState<string[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -51,13 +96,29 @@ export default function WorkspacePage() {
 
     if (storedToken) {
       void loadDrafts(storedToken);
+      void loadPrompts(storedToken);
     }
   }, []);
 
   const wordCount = useMemo(() => {
     if (!generated) return 0;
-    return textFromDoc(generated.body).length;
+    return plainTextFromRichText(generated.body).length;
   }, [generated]);
+
+  async function loadPrompts(authToken: string) {
+    setPromptsLoading(true);
+    const response = await apiFetch("/prompts?category=article_generation", { authToken });
+    const payload = await readApiJson<ListPromptsResponse | { message?: string | string[] }>(response);
+    setPromptsLoading(false);
+
+    if (!response.ok || !payload || !("items" in payload)) {
+      setError(getApiErrorMessage(payload, "Prompt 模板加载失败，已使用默认模板。"));
+      return;
+    }
+
+    setPrompts(payload.items);
+    setSelectedPromptId(payload.items.find((item) => item.isStarter)?.id ?? payload.items[0]?.id ?? "");
+  }
 
   async function loadDrafts(authToken: string) {
     const response = await apiFetch("/drafts/mine", { authToken });
@@ -86,35 +147,204 @@ export default function WorkspacePage() {
       return;
     }
 
-    setStatus("generating");
+    setStatus("streaming");
     setError("");
+    setTitleCandidates([]);
+    setRewriteResult("");
+    setRewriteSuggestions([]);
+    setGenerated(createEmptyGenerated());
+    setDraftTitle("");
+
+    let bodyText = "";
 
     try {
-      const response = await apiFetch("/ai/generate-article", {
-        method: "POST",
-        authToken: token,
-        body: JSON.stringify({ topic, audience, style }),
+      await streamRequest("/ai/generate-article/stream", token, {
+        topic,
+        audience,
+        style,
+        promptId: selectedPromptId || undefined,
+      }, (eventName, data) => {
+        if (eventName === "meta" && isRecord(data) && typeof data.model === "string") {
+          setGenerated((current) => ({ ...(current ?? createEmptyGenerated()), model: data.model as string }));
+          return;
+        }
+
+        if (eventName === "title" && isRecord(data) && typeof data.text === "string") {
+          setDraftTitle(data.text);
+          setGenerated((current) => ({ ...(current ?? createEmptyGenerated()), title: data.text as string }));
+          return;
+        }
+
+        if (eventName === "outline" && isRecord(data) && Array.isArray(data.items)) {
+          const outline = data.items.filter((item): item is string => typeof item === "string");
+          setGenerated((current) => ({ ...(current ?? createEmptyGenerated()), outline }));
+          return;
+        }
+
+        if (eventName === "body-delta" && isRecord(data) && typeof data.text === "string") {
+          bodyText += data.text;
+          const body = replaceWithPlainText(bodyText);
+          setGenerated((current) => ({
+            ...(current ?? createEmptyGenerated()),
+            bodyText,
+            body,
+          }));
+          return;
+        }
+
+        if (eventName === "done" && isRecord(data)) {
+          const finalBodyText = typeof data.bodyText === "string" ? data.bodyText : bodyText;
+          const finalBody = isRichTextDocument(data.body) ? data.body : replaceWithPlainText(finalBodyText);
+          setGenerated((current) => ({
+            ...(current ?? createEmptyGenerated()),
+            title: typeof data.title === "string" ? data.title : current?.title ?? "",
+            outline: Array.isArray(data.outline)
+              ? data.outline.filter((item): item is string => typeof item === "string")
+              : current?.outline ?? [],
+            bodyText: finalBodyText,
+            body: finalBody,
+          }));
+        }
       });
-      const payload = await readApiJson<GeneratedArticleDraft | { message?: string | string[] }>(response);
-
-      if (!response.ok || !payload || "message" in payload) {
-        setError(getApiErrorMessage(payload, "AI 生成失败，请稍后重试。"));
-        setStatus("idle");
-        return;
-      }
-
-      const article = payload as GeneratedArticleDraft;
-      setGenerated(article);
-      setDraftTitle(article.title);
       setStatus("idle");
-    } catch {
-      setError("无法连接 API 服务，请确认后端已启动。");
+    } catch (streamError) {
+      setError(streamError instanceof Error ? streamError.message : "AI 生成失败，请稍后重试。");
       setStatus("idle");
     }
   }
 
+  async function optimizeTitles() {
+    if (!token || titleStatus === "streaming") return;
+
+    setTitleStatus("streaming");
+    setTitleCandidates([]);
+    setError("");
+
+    try {
+      await streamRequest("/ai/optimize-titles/stream", token, {
+        topic,
+        audience,
+        style,
+        currentTitle: draftTitle,
+        bodyText: generated?.bodyText,
+      }, (eventName, data) => {
+        if (eventName === "title" && isRecord(data) && typeof data.text === "string") {
+          setTitleCandidates((items) =>
+            mergeTitleCandidate(items, {
+              text: data.text as string,
+              index: typeof data.index === "number" ? data.index : undefined,
+            }),
+          );
+        }
+      });
+      setTitleStatus("idle");
+    } catch (streamError) {
+      setTitleStatus("error");
+      setError(streamError instanceof Error ? streamError.message : "标题优化失败，请稍后重试。");
+    }
+  }
+
+  async function rewriteText() {
+    if (!token || rewriteStatus === "streaming") return;
+    const text = rewriteInput.trim() || generated?.bodyText.slice(0, 800).trim();
+    if (!text) {
+      setError("请先输入需要改写的正文片段。");
+      return;
+    }
+
+    setRewriteStatus("streaming");
+    setRewriteInput(text);
+    setRewriteResult("");
+    setRewriteSuggestions([]);
+    setError("");
+
+    let nextResult = "";
+
+    try {
+      await streamRequest("/ai/rewrite/stream", token, {
+        text,
+        mode: rewriteMode,
+        targetStyle: style,
+        topic,
+        audience,
+      }, (eventName, data) => {
+        if (eventName === "text-delta" && isRecord(data) && typeof data.text === "string") {
+          nextResult += data.text;
+          setRewriteResult(nextResult);
+          return;
+        }
+
+        if (eventName === "suggestion" && isRecord(data) && typeof data.text === "string") {
+          setRewriteSuggestions((items) => [...items, data.text as string]);
+          return;
+        }
+
+        if (eventName === "done" && isRecord(data)) {
+          if (typeof data.text === "string") {
+            nextResult = data.text;
+            setRewriteResult(data.text);
+          }
+          if (Array.isArray(data.suggestions)) {
+            setRewriteSuggestions(data.suggestions.filter((item): item is string => typeof item === "string"));
+          }
+        }
+      });
+      setRewriteStatus("idle");
+    } catch (streamError) {
+      setRewriteStatus("error");
+      setError(streamError instanceof Error ? streamError.message : "正文改写失败，请稍后重试。");
+    }
+  }
+
+  function applyRewriteToPreview() {
+    if (!rewriteResult.trim()) return;
+
+    const body = replaceWithPlainText(rewriteResult);
+    setGenerated((current) => ({
+      ...(current ?? createEmptyGenerated()),
+      bodyText: rewriteResult,
+      body,
+    }));
+  }
+
+  async function copyRewriteResult() {
+    if (!rewriteResult.trim() || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(rewriteResult);
+  }
+
+  function replaceGeneratedBody(text: string) {
+    if (!text.trim()) return;
+    const body = replaceWithPlainText(text);
+    setGenerated((current) => ({
+      ...(current ?? createEmptyGenerated()),
+      bodyText: text,
+      body,
+    }));
+  }
+
+  function appendGeneratedBody(text: string) {
+    if (!text.trim()) return;
+    setGenerated((current) => {
+      const base = current ?? createEmptyGenerated();
+      const body = appendPlainTextParagraph(base.body, text);
+      return {
+        ...base,
+        body,
+        bodyText: plainTextFromRichText(body),
+      };
+    });
+  }
+
+  function updateGeneratedBody(nextBody: RichTextDocument) {
+    setGenerated((current) => ({
+      ...(current ?? createEmptyGenerated()),
+      body: nextBody,
+      bodyText: plainTextFromRichText(nextBody),
+    }));
+  }
+
   async function saveDraft() {
-    if (!token || !generated) return;
+    if (!token || !generated || status === "streaming") return;
 
     setStatus("saving");
     setError("");
@@ -150,13 +380,13 @@ export default function WorkspacePage() {
         <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-5">
           <div className="flex items-center gap-4">
             <Link
-              aria-label="返回首页"
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f5f5f5] text-xl text-[#7b8088] hover:bg-[#eeeeee]"
+              aria-label="返回创作者主页"
+              className="flex h-9 w-9 items-center justify-center rounded-md bg-[#f5f5f5] text-lg text-[#7b8088] hover:bg-[#eeeeee]"
               href="/creator"
             >
-              ‹
+              ←
             </Link>
-            <div className="absolute left-1/2 -translate-x-1/2 text-center">
+            <div>
               <div className="text-lg font-semibold">发布文章</div>
               <div className="text-xs text-[#8f959e]">AI Creator Hub 工作台</div>
             </div>
@@ -164,9 +394,8 @@ export default function WorkspacePage() {
 
           <div className="flex items-center gap-5 text-sm text-[#4e5661]">
             <Link className="hidden hover:text-[#ff4d4f] sm:block" href="/docs">
-              头条号发文规范
+              发文规范
             </Link>
-            <span className="hidden sm:block">消息</span>
             {user ? (
               <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]" href="/creator">
                 {user.nickname}
@@ -180,32 +409,46 @@ export default function WorkspacePage() {
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-[1500px] gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="min-h-[calc(100vh-8rem)] bg-white rounded-lg">
-          <div className="flex flex-wrap items-center gap-2 border-b border-[#eeeeee] px-8 py-4">
-            {["撤销", "重做", "清除", "格式", "H", "B", "引用", "列表", "对齐", "代码", "图片", "链接", "更多"].map(
-              (item, index) => (
-                <button
-                  className="h-9 rounded-md px-2 text-sm font-semibold text-[#3b3f45] hover:bg-[#f4f5f7]"
-                  key={`${item}-${index}`}
-                  type="button"
-                >
-                  {item}
-                </button>
-              ),
-            )}
-          </div>
+      <div className="mx-auto grid max-w-[1500px] gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_440px]">
+        <section className="min-h-[calc(100vh-8rem)] rounded-lg bg-white">
+          
 
           <div className="mx-auto max-w-[920px] px-8 py-9">
             <form className="mb-9 rounded-lg border border-[#eeeeee] bg-[#fbfbfb] p-5" onSubmit={generateArticle}>
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div>
                   <div className="text-base font-semibold">创作设定</div>
-                  <p className="mt-1 text-sm text-[#8f959e]">输入主题后，AI 会先生成标题、大纲和正文草稿。</p>
+                  <p className="mt-1 text-sm text-[#8f959e]">
+                    选择模板并输入主题，AI 会流式生成标题、大纲和正文。
+                  </p>
                 </div>
                 <Link className="text-sm font-medium text-[#ff4d4f]" href="/drafts">
                   我的草稿
                 </Link>
+              </div>
+
+              <div className="mb-4">
+                <span className="mb-2 block text-sm font-medium text-[#4e5661]">
+                  Prompt 模板 {promptsLoading ? "加载中..." : ""}
+                </span>
+                <div className="grid gap-2 md:grid-cols-3">
+                  {(prompts.length ? prompts : [{ id: "", name: "默认生成模板", description: "使用后端默认 Prompt", isStarter: true } as PromptTemplateSummary]).map((prompt) => (
+                    <button
+                      className={[
+                        "rounded-md border px-3 py-2 text-left text-sm transition",
+                        selectedPromptId === prompt.id || (!selectedPromptId && !prompt.id)
+                          ? "border-[#ff4d4f] bg-[#fff1f1] text-[#d92d2d]"
+                          : "border-[#dedede] bg-white text-[#4e5661] hover:border-[#ff9a9b]",
+                      ].join(" ")}
+                      key={prompt.id || "default"}
+                      type="button"
+                      onClick={() => setSelectedPromptId(prompt.id)}
+                    >
+                      <span className="block font-semibold">{prompt.name}</span>
+                      <span className="mt-1 line-clamp-2 block text-xs text-[#8f959e]">{prompt.description}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="grid gap-3 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
@@ -250,10 +493,10 @@ export default function WorkspacePage() {
                 </div>
                 <button
                   className="h-11 rounded-md bg-[#ff4d4f] px-5 text-sm font-semibold text-white transition hover:bg-[#f04446] disabled:bg-[#f3a5a6]"
-                  disabled={status === "generating" || !topic.trim() || !token}
+                  disabled={status === "streaming" || !topic.trim() || !token}
                   type="submit"
                 >
-                  {status === "generating" ? "生成中..." : "AI 生成初稿"}
+                  {status === "streaming" ? "流式生成中..." : "AI 生成初稿"}
                 </button>
               </div>
             </form>
@@ -268,7 +511,7 @@ export default function WorkspacePage() {
               <div className="rounded-lg border border-dashed border-[#dedede] bg-white px-8 py-14 text-center">
                 <h1 className="text-3xl font-semibold text-[#1f2329]">登录后开始创作</h1>
                 <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[#6b7280]">
-                  工作台会把 AI 生成、草稿保存、编辑器和后续发布审核连成一条链路。先登录即可使用演示账号体验。
+                  工作台会把 AI 流式生成、草稿保存、编辑器和发布审核连成一条链路。先登录即可体验演示账号。
                 </p>
                 <Link className="mt-6 inline-flex rounded-md bg-[#ff4d4f] px-5 py-3 text-sm font-semibold text-white" href="/login">
                   进入登录
@@ -278,15 +521,47 @@ export default function WorkspacePage() {
               <>
                 <input
                   className="w-full border-0 border-b border-[#eeeeee] px-0 pb-5 text-[30px] font-semibold text-[#1f2329] outline-none placeholder:text-[#a8adb5]"
-                  placeholder="请输入文章标题（2～30个字）"
+                  placeholder="请输入文章标题"
                   value={draftTitle}
                   onChange={(event) => setDraftTitle(event.target.value)}
                 />
 
-                <article className="min-h-[520px] py-10 text-[17px] leading-9 text-[#1f2329]">
+                <article className="hidden">
                   {generated ? (
                     <>
-                      <div className="mb-8 rounded-md bg-[#fafafa] p-4">
+                      {generated.outline.length ? (
+                        <div className="mb-8 rounded-md bg-[#fafafa] p-4">
+                          <div className="mb-3 text-sm font-semibold text-[#4e5661]">生成大纲</div>
+                          <ol className="grid gap-2 pl-5 text-sm leading-7 text-[#5d6673]">
+                            {generated.outline.map((item) => (
+                              <li className="list-decimal" key={item}>
+                                {item}
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      ) : null}
+                      {generated.bodyText ? (
+                        generated.bodyText.split(/\n{2,}/).map((paragraph, index) => (
+                          <p className="my-6" key={`${paragraph}-${index}`}>
+                            {paragraph}
+                          </p>
+                        ))
+                      ) : (
+                        <p className="pt-20 text-center text-[#a8adb5]">正在等待正文流式返回...</p>
+                      )}
+                    </>
+                  ) : (
+                    <div className="pt-20 text-center text-[#a8adb5]">
+                      <p className="text-xl font-semibold">左侧填写主题，右侧助手会同步展示 AI 结果</p>
+                      <p className="mt-3 text-sm">生成后可以优化标题、改写正文，并保存为草稿继续编辑。</p>
+                    </div>
+                  )}
+                </article>
+                {generated ? (
+                  <>
+                    {generated.outline.length ? (
+                      <div className="mt-8 rounded-md bg-[#fafafa] p-4">
                         <div className="mb-3 text-sm font-semibold text-[#4e5661]">生成大纲</div>
                         <ol className="grid gap-2 pl-5 text-sm leading-7 text-[#5d6673]">
                           {generated.outline.map((item) => (
@@ -296,134 +571,260 @@ export default function WorkspacePage() {
                           ))}
                         </ol>
                       </div>
-                      {generated.body.content.map((node, index) => (
-                        <p className="my-6" key={index}>
-                          {node.content?.map((child) => child.text ?? "").join("")}
-                        </p>
-                      ))}
-                    </>
-                  ) : (
-                    <div className="pt-20 text-center text-[#a8adb5]">
-                      <p className="text-xl font-semibold">左侧填写主题，右侧助手会同步展示 AI 结果</p>
-                      <p className="mt-3 text-sm">生成后可以保存为草稿并进入编辑器继续修改。</p>
+                    ) : null}
+                    <div className="mt-8">
+                      <RichTextEditor value={generated.body} onChange={updateGeneratedBody} />
                     </div>
-                  )}
-                </article>
+                  </>
+                ) : (
+                  <div className="min-h-[520px] pt-20 text-center text-[#a8adb5]">
+                    <p className="text-xl font-semibold">左侧填写主题，右侧助手会同步展示 AI 结果</p>
+                    <p className="mt-3 text-sm">生成后可用富文本工具栏编辑正文，也可以继续优化标题和改写正文。</p>
+                  </div>
+                )}
               </>
             )}
           </div>
 
           <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-4 border-t border-[#eeeeee] bg-white px-8 py-4">
             <div className="flex flex-wrap items-center gap-6 text-sm text-[#8f959e]">
-              <span>草稿已保存</span>
+              <span>{status === "streaming" ? "AI 正在生成" : "草稿未保存"}</span>
               <span>共 {wordCount} 字</span>
-              <span>发文设置</span>
+              <span>发布前仍需审核评分</span>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              {/*
-              <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button">
-                预览
-              </button>
-              <button className="rounded-md border border-[#dedede] px-6 py-2.5 text-sm font-medium text-[#4e5661]" type="button">
-                定时发布
-              </button>
-              */}
-              <button
-                className="rounded-md bg-[#ff4d4f] px-6 py-2.5 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
-                disabled={!generated || status === "saving"}
-                type="button"
-                onClick={saveDraft}
-              >
-                {status === "saving" ? "保存中..." : "保存草稿"}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <aside className="h-fit min-h-[calc(100vh-8rem)] bg-[#fbfdff] px-6 py-8 lg:sticky lg:top-20 rounded-lg">
-          <div className="mb-8 flex items-center justify-center gap-3">
-            <span className="h-6 w-6 rounded-md bg-gradient-to-br from-[#ff5f62] to-[#8c7bff]" />
-            <h2 className="text-lg font-semibold">AI创作助手</h2>
-          </div>
-
-          <div className="mb-8 flex gap-8 border-b border-transparent text-sm">
-            <button className="border-b-2 border-[#1f2329] pb-3 font-semibold text-[#1f2329]" type="button">
-              AI 创作
-            </button>
-            <button className="pb-3 text-[#8f959e]" type="button">
-              内容建议
-            </button>
-          </div>
-
-          <div className="max-h-[58vh] overflow-y-auto pr-2 text-[15px] leading-8 text-[#2f3640]">
-            <h3 className="mb-4 text-base font-semibold">{generated?.title ?? "等待生成创作建议"}</h3>
-            {generated ? (
-              <>
-                {generated.bodyText.split("\n\n").map((paragraph) => (
-                  <p className="mb-4" key={paragraph}>
-                    {paragraph}
-                  </p>
-                ))}
-                <p className="mt-6 text-xs text-[#a8adb5]">以上文本由 AI 基于用户指令生成，请谨慎参考和使用</p>
-              </>
-            ) : (
-              <p className="text-[#8f959e]">输入创作主题后，助手会给出标题、大纲和正文草稿。生成结果可以添加到正文并保存为草稿。</p>
-            )}
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-2">
             <button
-              className="rounded-md bg-gradient-to-r from-[#ff4d4f] to-[#8c7bff] px-4 py-2 text-sm font-semibold text-white disabled:opacity-45"
-              disabled={!generated}
+              className="rounded-md bg-[#ff4d4f] px-6 py-2.5 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
+              disabled={!generated || status === "saving" || status === "streaming"}
               type="button"
               onClick={saveDraft}
             >
-              添加到正文
-            </button>
-            <button className="rounded-md bg-[#f0f1f3] px-4 py-2 text-sm font-medium text-[#4e5661]" type="button">
-              复制
-            </button>
-            <button className="rounded-md bg-[#f0f1f3] px-4 py-2 text-sm font-medium text-[#4e5661]" type="button">
-              重试
+              {status === "saving" ? "保存中..." : "保存草稿"}
             </button>
           </div>
+        </section>
 
-          <div className="mt-7 rounded-md bg-white p-3 shadow-[0_8px_28px_rgba(31,35,41,0.06)]">
-            <div className="flex items-center gap-2">
-              <input
-                className="min-w-0 flex-1 border-0 px-2 py-3 text-sm outline-none placeholder:text-[#b5bac2]"
-                placeholder="输入创作主题、观点或大纲，AI 帮你写"
-                value={topic}
-                onChange={(event) => setTopic(event.target.value)}
-              />
-              <button
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-[#ffe4ea] font-semibold text-[#ff4d4f]"
-                type="button"
-              >
-                ↑
-              </button>
-            </div>
+        <aside className="hidden">
+          <div className="mb-8 flex items-center justify-center gap-3">
+            <span className="h-6 w-6 rounded-md bg-gradient-to-br from-[#ff5f62] to-[#8c7bff]" />
+            <h2 className="text-lg font-semibold">AI 创作助手</h2>
           </div>
-
-          {drafts.length ? (
-            <div className="mt-8 border-t border-[#eeeeee] pt-5">
-              <div className="mb-3 text-sm font-semibold text-[#4e5661]">最近草稿</div>
+{/*
+          <div className="mb-6 flex gap-8 border-b border-[#eeeeee] text-sm">
+            <button className="border-b-2 border-[#1f2329] pb-3 font-semibold text-[#1f2329]" type="button">
+              AI 创作
+            </button>
+          </div>
+*/}
+          <div className="grid gap-5">
+            <section className="rounded-md border border-[#eeeeee] bg-white p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-[#1f2329]">标题优化</h3>
+                <button
+                  className="rounded-md bg-[#ff4d4f] px-3 py-1.5 text-xs font-semibold text-white disabled:bg-[#f3a5a6]"
+                  disabled={!token || titleStatus === "streaming" || !topic.trim()}
+                  type="button"
+                  onClick={optimizeTitles}
+                >
+                  {titleStatus === "streaming" ? "生成中..." : "优化标题"}
+                </button>
+              </div>
               <div className="grid gap-2">
-                {drafts.slice(0, 3).map((draft) => (
-                  <Link
-                    className="rounded-md border border-[#eeeeee] bg-white px-3 py-2 text-sm hover:border-[#ffb6b7]"
-                    href={`/drafts/${draft.id}`}
-                    key={draft.id}
+                {titleCandidates.length ? (
+                  titleCandidates.map((title) => (
+                    <button
+                      className="rounded-md border border-[#eeeeee] px-3 py-2 text-left text-sm leading-6 hover:border-[#ff9a9b] hover:text-[#d92d2d]"
+                      key={title}
+                      type="button"
+                      onClick={() => setDraftTitle(title)}
+                    >
+                      {title}
+                    </button>
+                  ))
+                ) : (
+                  <p className="text-sm leading-6 text-[#8f959e]">生成初稿后可让 AI 流式给出多个标题候选。</p>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-md border border-[#eeeeee] bg-white p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-[#1f2329]">正文改写</h3>
+                <button
+                  className="rounded-md bg-[#ff4d4f] px-3 py-1.5 text-xs font-semibold text-white disabled:bg-[#f3a5a6]"
+                  disabled={!token || rewriteStatus === "streaming"}
+                  type="button"
+                  onClick={rewriteText}
+                >
+                  {rewriteStatus === "streaming" ? "改写中..." : "开始改写"}
+                </button>
+              </div>
+
+              <div className="mb-3 flex flex-wrap gap-2">
+                {rewriteModes.map((mode) => (
+                  <button
+                    className={[
+                      "rounded-md border px-2.5 py-1.5 text-xs font-medium",
+                      rewriteMode === mode.value
+                        ? "border-[#ff4d4f] bg-[#fff1f1] text-[#d92d2d]"
+                        : "border-[#dedede] text-[#5d6673] hover:border-[#ff9a9b]",
+                    ].join(" ")}
+                    key={mode.value}
+                    type="button"
+                    onClick={() => setRewriteMode(mode.value)}
                   >
-                    <div className="line-clamp-1 font-medium text-[#1f2329]">{draft.title}</div>
-                    <div className="mt-1 text-xs text-[#8f959e]">v{draft.version}</div>
-                  </Link>
+                    {mode.label}
+                  </button>
                 ))}
               </div>
-            </div>
-          ) : null}
+
+              <textarea
+                className="min-h-28 w-full resize-y rounded-md border border-[#dedede] px-3 py-2 text-sm leading-6 outline-none focus:border-[#ff4d4f]"
+                placeholder="输入需要改写的正文片段；留空时使用当前生成正文前 800 字。"
+                value={rewriteInput}
+                onChange={(event) => setRewriteInput(event.target.value)}
+              />
+
+              <div className="mt-3 min-h-28 rounded-md bg-[#fafafa] p-3 text-sm leading-7 text-[#2f3640]">
+                {rewriteResult || "改写结果会在这里流式出现。"}
+              </div>
+
+              {rewriteSuggestions.length ? (
+                <ul className="mt-3 grid gap-1 text-xs leading-5 text-[#8f959e]">
+                  {rewriteSuggestions.map((item) => (
+                    <li key={item}>建议：{item}</li>
+                  ))}
+                </ul>
+              ) : null}
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  className="rounded-md bg-gradient-to-r from-[#ff4d4f] to-[#8c7bff] px-3 py-2 text-xs font-semibold text-white disabled:opacity-45"
+                  disabled={!rewriteResult || rewriteStatus === "streaming"}
+                  type="button"
+                  onClick={applyRewriteToPreview}
+                >
+                  替换预览正文
+                </button>
+                <button
+                  className="rounded-md bg-[#f0f1f3] px-3 py-2 text-xs font-medium text-[#4e5661] disabled:opacity-45"
+                  disabled={!rewriteResult || rewriteStatus === "streaming"}
+                  type="button"
+                  onClick={copyRewriteResult}
+                >
+                  复制结果
+                </button>
+              </div>
+            </section>
+
+            <section className="max-h-[34vh] overflow-y-auto rounded-md border border-[#eeeeee] bg-white p-4">
+              <h3 className="mb-3 text-sm font-semibold text-[#1f2329]">{generated?.title || "等待生成创作建议"}</h3>
+              {generated?.bodyText ? (
+                <>
+                  {generated.bodyText.split(/\n{2,}/).map((paragraph, index) => (
+                    <p className="mb-3 text-sm leading-7 text-[#2f3640]" key={`${paragraph}-${index}`}>
+                      {paragraph}
+                    </p>
+                  ))}
+                  <p className="mt-4 text-xs text-[#a8adb5]">以上文本由 AI 基于用户指令生成，请谨慎参考和使用。</p>
+                </>
+              ) : (
+                <p className="text-sm leading-7 text-[#8f959e]">
+                  输入创作主题后，助手会逐步给出标题、大纲和正文。所有发布动作仍需经过后端审核和评分。
+                </p>
+              )}
+            </section>
+
+            {drafts.length ? (
+              <section className="border-t border-[#eeeeee] pt-5">
+                <div className="mb-3 text-sm font-semibold text-[#4e5661]">最近草稿</div>
+                <div className="grid gap-2">
+                  {drafts.slice(0, 3).map((draft) => (
+                    <Link
+                      className="rounded-md border border-[#eeeeee] bg-white px-3 py-2 text-sm hover:border-[#ffb6b7]"
+                      href={`/drafts/${draft.id}`}
+                      key={draft.id}
+                    >
+                      <div className="line-clamp-1 font-medium text-[#1f2329]">{draft.title}</div>
+                      <div className="mt-1 text-xs text-[#8f959e]">v{draft.version}</div>
+                    </Link>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+          </div>
         </aside>
+        <AiWritingAssistant
+          authToken={token}
+          topic={topic}
+          audience={audience}
+          style={style}
+          currentTitle={draftTitle}
+          bodyText={generated?.bodyText ?? ""}
+          previewTitle={generated?.title}
+          previewBodyText={generated?.bodyText}
+          recentDrafts={drafts}
+          onSelectTitle={setDraftTitle}
+          onReplaceBody={replaceGeneratedBody}
+          onAppendBody={appendGeneratedBody}
+        />
       </div>
     </main>
   );
+}
+
+async function streamRequest(
+  path: string,
+  authToken: string,
+  body: unknown,
+  onEvent: (eventName: string, data: unknown) => void,
+) {
+  const response = await apiFetch(path, {
+    method: "POST",
+    authToken,
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok || !response.body) {
+    const payload = await readApiJson<{ message?: string | string[] }>(response);
+    throw new Error(getApiErrorMessage(payload, "AI 流式请求失败，请稍后重试。"));
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let streamFinished = false;
+  const parser = createAiSseParser(({ event, data }) => {
+    if (event === "error") {
+      const message = isRecord(data) && typeof data.message === "string" ? data.message : "AI 流式生成失败。";
+      throw new Error(message);
+    }
+
+    if (event === "done") {
+      streamFinished = true;
+    }
+
+    onEvent(event, data);
+  });
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parser.feed(decoder.decode(value, { stream: true }));
+  }
+
+  const tail = decoder.decode();
+  if (tail) {
+    parser.feed(tail);
+  }
+
+  if (!streamFinished) {
+    throw new Error("AI 流式连接已中断，请重试。");
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function isRichTextDocument(value: unknown): value is RichTextDocument {
+  return isRecord(value) && value.type === "doc" && Array.isArray(value.content);
 }
