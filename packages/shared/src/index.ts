@@ -323,6 +323,38 @@ export interface CursorPageResponse<T> {
   nextCursor?: string;
 }
 
+export interface CreatorOverviewStats {
+  followers: number;
+  publishedArticles: number;
+  draftCount: number;
+  totalViews: number;
+  totalLikes: number;
+  totalFavorites: number;
+  averageQualityScore: number;
+}
+
+export interface CreatorWorkItem {
+  id: string;
+  title: string;
+  summary: string;
+  status: ArticleStatus;
+  publishedAt: string;
+  updatedAt: string;
+  qualityScore: number;
+  engagement: ArticleEngagementStats;
+}
+
+export interface CreatorOverviewResponse {
+  user: {
+    id: string;
+    nickname: string;
+    avatarUrl?: string | null;
+  };
+  stats: CreatorOverviewStats;
+  recentDrafts: DraftSummary[];
+  works: CreatorWorkItem[];
+}
+
 export interface CreateEngagementEventInput {
   type: EngagementEventType;
   userKey?: string;
