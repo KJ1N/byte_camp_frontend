@@ -21,7 +21,12 @@ async function main() {
     update: {
       systemPrompt: "你是一个严谨的中文内容创作助手，擅长生成结构清晰、可读性强、适合资讯平台分发的图文内容。",
       userTemplate: "请围绕主题 {{topic}}，面向 {{audience}}，用 {{style}} 风格生成标题、大纲和正文。",
-      paramsSchema: { topic: "string", audience: "string", style: "string" },
+      paramsSchema: {
+        topic: "string",
+        audience: "string",
+        style: "string",
+        description: "适合资讯型中长图文初稿，是平台默认生成模板。",
+      },
       fewShots: [],
       isStarter: true,
     },
@@ -32,7 +37,12 @@ async function main() {
       category: "article_generation",
       systemPrompt: "你是一个严谨的中文内容创作助手，擅长生成结构清晰、可读性强、适合资讯平台分发的图文内容。",
       userTemplate: "请围绕主题 {{topic}}，面向 {{audience}}，用 {{style}} 风格生成标题、大纲和正文。",
-      paramsSchema: { topic: "string", audience: "string", style: "string" },
+      paramsSchema: {
+        topic: "string",
+        audience: "string",
+        style: "string",
+        description: "适合资讯型中长图文初稿，是平台默认生成模板。",
+      },
       fewShots: [],
       isStarter: true,
     },

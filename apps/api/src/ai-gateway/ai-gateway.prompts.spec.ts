@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { AuditDecision, RiskCategory } from "@bytecamp-aigc/shared";
 import {
+  buildContentAuditMessages,
   buildRewriteMessages,
   buildComplianceRewriteMessages,
   buildTitleOptimizationMessages,
   parseArticleGenerationJson,
+  parseAuditJson,
   parseRewriteJson,
   parseTitleOptimizationJson,
 } from "./ai-gateway.prompts";
@@ -105,5 +107,77 @@ describe("compliance rewrite prompts", () => {
     assert.match(messages[1].content, /身份证号和手机号/);
     assert.match(messages[1].content, /删除或脱敏个人信息/);
     assert.match(messages[1].content, /保留原文的主要观点和段落结构/);
+  });
+});
+
+describe("content audit prompts", () => {
+  it("builds model audit messages with identity, categories, and fixed JSON contract", () => {
+    const messages = buildContentAuditMessages("每天喝白糖水就能治好颈椎病，不用吃药。");
+
+    assert.equal(messages.length, 2);
+    assert.match(messages[0].content, /内容安全审核助理/);
+    assert.match(messages[0].content, /decision/);
+    assert.match(messages[0].content, /PASS/);
+    assert.match(messages[0].content, /WARN/);
+    assert.match(messages[0].content, /BLOCK/);
+    assert.match(messages[0].content, /MISLEADING/);
+    assert.match(messages[0].content, /SENSITIVE_INFO/);
+    assert.match(messages[1].content, /白糖水/);
+  });
+
+  it("parses a model audit response into the existing AuditResult contract", () => {
+    const result = parseAuditJson(
+      JSON.stringify({
+        decision: "WARN",
+        riskLevel: "medium",
+        categories: ["MISLEADING"],
+        evidence: [{ text: "百分百见效", reason: "包含绝对化疗效承诺" }],
+        rewriteSuggestions: ["删除绝对化疗效表达"],
+        summary: "内容存在虚假医疗或夸大效果风险，需要修改后重审。",
+      }),
+      { model: "audit-model", source: "MODEL" },
+    );
+
+    assert.equal(result.decision, AuditDecision.Warn);
+    assert.equal(result.riskLevel, "medium");
+    assert.deepEqual(result.categories, [RiskCategory.Misleading]);
+    assert.equal(result.evidence[0].text, "百分百见效");
+    assert.deepEqual(result.rewriteSuggestions, ["删除绝对化疗效表达"]);
+    assert.equal(result.model, "audit-model");
+    assert.equal(result.source, "MODEL");
+  });
+
+  it("normalizes pass audit responses to empty risk arrays", () => {
+    const result = parseAuditJson(
+      JSON.stringify({
+        decision: "PASS",
+        riskLevel: "none",
+        categories: ["MISLEADING"],
+        evidence: [{ text: "ignored", reason: "ignored" }],
+        rewriteSuggestions: ["ignored"],
+        summary: "未发现明显风险。",
+      }),
+      { source: "MODEL" },
+    );
+
+    assert.equal(result.decision, AuditDecision.Pass);
+    assert.deepEqual(result.categories, []);
+    assert.deepEqual(result.evidence, []);
+    assert.deepEqual(result.rewriteSuggestions, []);
+  });
+
+  it("rejects invalid audit enum values from the provider", () => {
+    assert.throws(() =>
+      parseAuditJson(
+        JSON.stringify({
+          decision: "ALLOW",
+          riskLevel: "none",
+          categories: [],
+          evidence: [],
+          rewriteSuggestions: [],
+          summary: "bad",
+        }),
+      ),
+    );
   });
 });

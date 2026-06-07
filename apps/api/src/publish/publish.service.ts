@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
 import {
   ArticleStatus,
@@ -30,21 +30,22 @@ export class PublishService {
   ) {}
 
   async checkDraft(authorId: string, draftId: string): Promise<AuditCheckResponse> {
+    const { draft, text } = await this.loadDraftText(this.prisma, authorId, draftId);
+    const result = await this.auditService.checkText(`${draft.title}\n${text}`);
+
     return this.prisma.$transaction(async (tx) => {
-      const { draft, text } = await this.loadDraftText(tx, authorId, draftId);
-      const result = await this.auditService.checkText(`${draft.title}\n${text}`);
       return this.createAuditRecord(tx, draft.id, result);
     });
   }
 
   async scoreDraft(authorId: string, draftId: string): Promise<ScoringArticleResponse> {
-    return this.prisma.$transaction(async (tx) => {
-      const { draft, text } = await this.loadDraftText(tx, authorId, draftId);
-      const result = this.scoringService.scoreArticle({
-        title: draft.title,
-        text,
-      });
+    const { draft, text } = await this.loadDraftText(this.prisma, authorId, draftId);
+    const result = this.scoringService.scoreArticle({
+      title: draft.title,
+      text,
+    });
 
+    return this.prisma.$transaction(async (tx) => {
       return this.createQualityScore(tx, draft.id, result);
     });
   }
@@ -120,14 +121,16 @@ export class PublishService {
   }
 
   async publishDraft(authorId: string, draftId: string): Promise<PublishArticleResponse> {
+    const { draft, body, text } = await this.loadDraftText(this.prisma, authorId, draftId);
+    const auditResult = await this.auditService.checkText(`${draft.title}\n${text}`);
+    const scoreResult = this.scoringService.scoreArticle({
+      title: draft.title,
+      text,
+      safetyScore: this.safetyScoreFor(auditResult.decision),
+    });
+
     return this.prisma.$transaction(async (tx) => {
-      const { draft, body, text } = await this.loadDraftText(tx, authorId, draftId);
-      const auditResult = await this.auditService.checkText(`${draft.title}\n${text}`);
-      const scoreResult = this.scoringService.scoreArticle({
-        title: draft.title,
-        text,
-        safetyScore: this.safetyScoreFor(auditResult.decision),
-      });
+      await this.assertDraftUnchanged(tx, draft.id, draft.version);
 
       const audit = await this.createAuditRecord(tx, draft.id, auditResult);
       const score = await this.createQualityScore(tx, draft.id, scoreResult);
@@ -235,8 +238,8 @@ export class PublishService {
     });
   }
 
-  private async loadDraftText(tx: Prisma.TransactionClient, authorId: string, draftId: string) {
-    const draft = await tx.draft.findFirst({
+  private async loadDraftText(db: Pick<Prisma.TransactionClient, "draft">, authorId: string, draftId: string) {
+    const draft = await db.draft.findFirst({
       where: { id: draftId, authorId },
     });
 
@@ -248,6 +251,17 @@ export class PublishService {
       body,
       text: richTextToPlainText(body),
     };
+  }
+
+  private async assertDraftUnchanged(tx: Prisma.TransactionClient, draftId: string, version: number) {
+    const currentDraft = await tx.draft.findFirst({
+      where: { id: draftId, version },
+      select: { id: true },
+    });
+
+    if (!currentDraft) {
+      throw new ConflictException("Draft changed after audit. Please review and publish again.");
+    }
   }
 
   private async createAuditRecord(

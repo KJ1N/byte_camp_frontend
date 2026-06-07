@@ -7,12 +7,14 @@ import type {
   DraftSummary,
   GeneratedArticleDraft,
   ListPromptsResponse,
+  PromptTemplateDetail,
   PromptTemplateSummary,
   RichTextDocument,
 } from "@bytecamp-aigc/shared";
 
 import { AiWritingAssistant } from "@/components/ai-writing-assistant";
 import { RichTextEditor } from "@/components/editor/rich-text-editor";
+import { PromptManagerPanel } from "@/components/prompt-manager-panel";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { createAiSseParser, mergeTitleCandidate } from "@/lib/ai-stream";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
@@ -115,6 +117,24 @@ export default function WorkspacePage() {
 
     setPrompts(payload.items);
     setSelectedPromptId(payload.items.find((item) => item.isStarter)?.id ?? payload.items[0]?.id ?? "");
+  }
+
+  function handlePromptSaved(prompt: PromptTemplateDetail) {
+    const summary: PromptTemplateSummary = {
+      id: prompt.id,
+      name: prompt.name,
+      category: prompt.category,
+      owner: prompt.owner,
+      isStarter: prompt.isStarter,
+      description: prompt.description,
+    };
+
+    setPrompts((items) => {
+      const exists = items.some((item) => item.id === summary.id);
+      if (exists) return items.map((item) => (item.id === summary.id ? summary : item));
+      return [...items, summary];
+    });
+    setSelectedPromptId(prompt.id);
   }
 
   async function loadDrafts(authToken: string) {
@@ -424,29 +444,15 @@ export default function WorkspacePage() {
                 </Link>
               </div>
 
-              <div className="mb-4">
-                <span className="mb-2 block text-sm font-medium text-[#4e5661]">
-                  Prompt 模板 {promptsLoading ? "加载中..." : ""}
-                </span>
-                <div className="grid gap-2 md:grid-cols-3">
-                  {(prompts.length ? prompts : [{ id: "", name: "默认生成模板", description: "使用后端默认 Prompt", isStarter: true } as PromptTemplateSummary]).map((prompt) => (
-                    <button
-                      className={[
-                        "rounded-md border px-3 py-2 text-left text-sm transition",
-                        selectedPromptId === prompt.id || (!selectedPromptId && !prompt.id)
-                          ? "border-[#ff4d4f] bg-[#fff1f1] text-[#d92d2d]"
-                          : "border-[#dedede] bg-white text-[#4e5661] hover:border-[#ff9a9b]",
-                      ].join(" ")}
-                      key={prompt.id || "default"}
-                      type="button"
-                      onClick={() => setSelectedPromptId(prompt.id)}
-                    >
-                      <span className="block font-semibold">{prompt.name}</span>
-                      <span className="mt-1 line-clamp-2 block text-xs text-[#8f959e]">{prompt.description}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <PromptManagerPanel
+                authToken={token}
+                prompts={prompts}
+                promptsLoading={promptsLoading}
+                selectedPromptId={selectedPromptId}
+                onError={setError}
+                onPromptSaved={handlePromptSaved}
+                onSelectPrompt={setSelectedPromptId}
+              />
 
               <div className="grid gap-3 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
                 <label className="block">

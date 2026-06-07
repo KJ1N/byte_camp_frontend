@@ -107,6 +107,34 @@ export interface ListPromptsResponse {
   items: PromptTemplateSummary[];
 }
 
+export interface PromptTemplateDetail extends PromptTemplateSummary {
+  readonly: boolean;
+  userTemplate: string;
+  sourcePromptId?: string | null;
+  outputContractPreview: string;
+}
+
+export interface CreatePromptInput {
+  name: string;
+  category: string;
+  description?: string;
+  userTemplate: string;
+}
+
+export interface UpdatePromptInput {
+  name?: string;
+  description?: string;
+  userTemplate?: string;
+}
+
+export interface CopyPromptInput {
+  name?: string;
+}
+
+export interface PromptTemplateMutationResponse {
+  prompt: PromptTemplateDetail;
+}
+
 export interface OptimizeTitlesInput {
   topic: string;
   audience: string;
@@ -240,6 +268,8 @@ export interface AuditResult {
   evidence: Array<{ text: string; reason: string }>;
   rewriteSuggestions: string[];
   summary: string;
+  model?: string;
+  source?: "MODEL" | "MOCK";
 }
 
 export interface AuditCheckInput {

@@ -177,6 +177,55 @@ describe("AiGatewayService", () => {
     );
   });
 
+  it("uses the live provider for structured content audit", async () => {
+    const provider = createProvider(
+      JSON.stringify({
+        decision: "WARN",
+        riskLevel: "medium",
+        categories: ["SENSITIVE_INFO"],
+        evidence: [{ text: "手机号", reason: "包含敏感个人信息" }],
+        rewriteSuggestions: ["删除或脱敏个人信息"],
+        summary: "内容需要修改后重新审核。",
+      }),
+    );
+    const service = new ServiceCtor(liveConfig, createPromptsService(), provider);
+
+    const result = await service.auditContent("案例里包含手机号，需要发布前处理。");
+
+    assert.equal(provider.calls.length, 1);
+    assert.equal(provider.calls[0].model, "test-model");
+    assert.match(provider.calls[0].messages[0].content, /内容安全审核助理/);
+    assert.match(provider.calls[0].messages[1].content, /手机号/);
+    assert.equal(result.decision, AuditDecision.Warn);
+    assert.equal(result.riskLevel, "medium");
+    assert.deepEqual(result.categories, [RiskCategory.SensitiveInfo]);
+    assert.equal(result.model, "live-model");
+    assert.equal(result.source, "MODEL");
+  });
+
+  it("returns deterministic mock content audit results in mock mode", async () => {
+    const service = new ServiceCtor(
+      createConfig({
+        AI_PROVIDER_MODE: "mock",
+        AI_MODEL: "mock-model",
+      }),
+      createPromptsService(),
+      createProvider("{}"),
+    );
+
+    const block = await service.auditContent("参与赌博可以快速回本。");
+    const warn = await service.auditContent("案例里包含身份证号和手机号。");
+    const pass = await service.auditContent("AI 可以帮助创作者梳理选题并优化表达。");
+
+    assert.equal(block.decision, AuditDecision.Block);
+    assert.equal(block.source, "MOCK");
+    assert.ok(block.categories.includes(RiskCategory.Gambling));
+    assert.equal(warn.decision, AuditDecision.Warn);
+    assert.ok(warn.categories.includes(RiskCategory.SensitiveInfo));
+    assert.equal(pass.decision, AuditDecision.Pass);
+    assert.deepEqual(pass.categories, []);
+  });
+
   it("returns creator inspirations with topics that can prefill the workspace", async () => {
     const service = new AiGatewayService({
       get: (key: string) => (key === "AI_MODEL" ? "mock-model" : undefined),

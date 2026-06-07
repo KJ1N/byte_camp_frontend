@@ -1,9 +1,11 @@
 import type {
+  AuditResult,
   ComplianceRewriteContext,
   GenerateArticleInput,
   OptimizeTitlesInput,
   RewriteArticleInput,
 } from "@bytecamp-aigc/shared";
+import { AuditDecision, RiskCategory } from "@bytecamp-aigc/shared";
 import type { AiChatMessage } from "./ai-provider.client";
 import { AiProviderBadOutputException } from "./ai-gateway.errors";
 
@@ -29,6 +31,11 @@ export interface ParsedTitleOptimization {
 export interface ParsedRewrite {
   text: string;
   suggestions: string[];
+}
+
+export interface AuditParseMeta {
+  model?: string;
+  source?: "MODEL" | "MOCK";
 }
 
 export const defaultArticleGenerationPrompt: ArticleGenerationPrompt = {
@@ -121,6 +128,61 @@ Mode rules:
   ];
 }
 
+export function buildContentAuditMessages(text: string): AiChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `# Identity
+你是 AI Creator Hub 的内容安全审核助理，负责对待发布文章做合规审核，并输出可程序解析的审核结果。
+
+# Instructions
+* 严格识别违法违规、低俗色情、赌博、毒品、虚假医疗或金融建议、不良价值观、广告引流、低质灌水、隐私泄露等风险。
+* 仅输出固定 JSON 结构，禁止输出 Markdown、自然语言解释、多余话术或备注内容。
+* decision 只能是 PASS、WARN、BLOCK。
+* riskLevel 只能是 none、low、medium、high。
+* categories 只能使用 ADULT、GAMBLING、DRUGS、SENSITIVE_INFO、ILLEGAL、LOW_QUALITY、MISLEADING。
+* evidence 必须给出命中的原文片段和原因。
+* PASS 内容必须返回 riskLevel=none、空 categories、空 evidence、空 rewriteSuggestions。
+
+## 固定输出结构
+{
+  "decision": "PASS | WARN | BLOCK",
+  "riskLevel": "none | low | medium | high",
+  "categories": ["SENSITIVE_INFO"],
+  "evidence": [{"text": "命中的片段", "reason": "为什么有风险"}],
+  "rewriteSuggestions": ["替代表达或修改建议"],
+  "summary": "整体审核说明"
+}
+
+# Examples
+<user_query id="audit-pass">
+请审核内容：AI 可以帮助创作者梳理选题、生成大纲，并在发布前检查内容质量。
+</user_query>
+<assistant_response id="audit-pass">
+{"decision":"PASS","riskLevel":"none","categories":[],"evidence":[],"rewriteSuggestions":[],"summary":"未发现明显风险。"}
+</assistant_response>
+<user_query id="audit-warn">
+请审核内容：每天喝白糖水就能治好颈椎病，不用吃药，百分百见效。
+</user_query>
+<assistant_response id="audit-warn">
+{"decision":"WARN","riskLevel":"medium","categories":["MISLEADING"],"evidence":[{"text":"百分百见效","reason":"包含绝对化疗效承诺。"}],"rewriteSuggestions":["删除绝对化疗效表达，补充风险提示。"],"summary":"内容存在虚假医疗或夸大效果风险，需要修改后重审。"}
+</assistant_response>
+<user_query id="audit-block">
+请审核内容：参与赌博可以快速回本，还能稳赚不赔。
+</user_query>
+<assistant_response id="audit-block">
+{"decision":"BLOCK","riskLevel":"high","categories":["GAMBLING","MISLEADING"],"evidence":[{"text":"参与赌博可以快速回本","reason":"包含赌博引导表达。"},{"text":"稳赚不赔","reason":"包含绝对化虚假收益承诺。"}],"rewriteSuggestions":["删除赌博相关表达，改为风险教育或合规案例。"],"summary":"内容命中高风险赌博引导，禁止发布。"}
+</assistant_response>`,
+    },
+    {
+      role: "user",
+      content: `请审核以下待发布文章内容，并严格返回 JSON：
+
+${text}`,
+    },
+  ];
+}
+
 export function buildComplianceRewriteMessages(input: ComplianceRewriteContext): AiChatMessage[] {
   const evidence = input.audit.evidence
     .map((item, index) => `${index + 1}. ${item.text}: ${item.reason}`)
@@ -198,6 +260,36 @@ export function parseRewriteJson(rawContent: string): ParsedRewrite {
   return { text, suggestions };
 }
 
+export function parseAuditJson(rawContent: string, meta: AuditParseMeta = {}): AuditResult {
+  const value = parseJsonObject(rawContent);
+  const record = asRecord(value);
+  const decision = readAuditDecision(record.decision);
+  const riskLevel = readRiskLevel(record.riskLevel);
+  const summary = readString(record.summary) || defaultAuditSummary(decision);
+
+  if (decision === AuditDecision.Pass) {
+    return {
+      decision,
+      riskLevel: "none",
+      categories: [],
+      evidence: [],
+      rewriteSuggestions: [],
+      summary,
+      ...meta,
+    };
+  }
+
+  return {
+    decision,
+    riskLevel,
+    categories: readRiskCategories(record.categories),
+    evidence: readEvidence(record.evidence),
+    rewriteSuggestions: readStringArray(record.rewriteSuggestions),
+    summary,
+    ...meta,
+  };
+}
+
 function parseJsonObject(rawContent: string): unknown {
   const jsonText = extractJsonObject(rawContent);
 
@@ -231,6 +323,53 @@ function readStringArray(value: unknown) {
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function readAuditDecision(value: unknown): AuditDecision {
+  if (value === AuditDecision.Pass || value === AuditDecision.Warn || value === AuditDecision.Block) {
+    return value;
+  }
+
+  throw new AiProviderBadOutputException();
+}
+
+function readRiskLevel(value: unknown): AuditResult["riskLevel"] {
+  if (value === "none" || value === "low" || value === "medium" || value === "high") {
+    return value;
+  }
+
+  throw new AiProviderBadOutputException();
+}
+
+function readRiskCategories(value: unknown): RiskCategory[] {
+  const known = new Set<string>(Object.values(RiskCategory));
+  return readStringArray(value).map((item) => {
+    if (!known.has(item)) {
+      throw new AiProviderBadOutputException();
+    }
+
+    return item as RiskCategory;
+  });
+}
+
+function readEvidence(value: unknown): AuditResult["evidence"] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return undefined;
+      const record = item as Record<string, unknown>;
+      const text = readString(record.text);
+      const reason = readString(record.reason);
+      return text && reason ? { text, reason } : undefined;
+    })
+    .filter((item): item is { text: string; reason: string } => Boolean(item));
+}
+
+function defaultAuditSummary(decision: AuditDecision) {
+  if (decision === AuditDecision.Block) return "内容命中高风险规则，禁止发布。";
+  if (decision === AuditDecision.Warn) return "内容存在风险，需要修改后重审。";
+  return "未发现明显风险。";
 }
 
 function unique(values: string[]) {
