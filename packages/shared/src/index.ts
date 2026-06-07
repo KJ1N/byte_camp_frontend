@@ -276,6 +276,56 @@ export interface AuditResult {
   source?: "MODEL" | "MOCK";
 }
 
+export enum AssetKind {
+  Image = "IMAGE",
+  Document = "DOCUMENT",
+}
+
+export enum AssetAuditStatus {
+  Passed = "PASSED",
+  Warn = "WARN",
+  Blocked = "BLOCKED",
+}
+
+export interface AssetAuditResult {
+  decision: AssetAuditStatus;
+  riskLevel: "none" | "low" | "medium" | "high";
+  categories: RiskCategory[];
+  evidence: Array<{ text: string; reason: string }>;
+  summary: string;
+  model: string;
+  source: "MODEL" | "MOCK";
+}
+
+export interface AssetSummary {
+  id: string;
+  kind: AssetKind;
+  filename: string;
+  mimeType: string;
+  url: string;
+  auditStatus: AssetAuditStatus;
+  metadata: {
+    originalName: string;
+    size: number;
+    storageKey: string;
+    audit: AssetAuditResult;
+  };
+  createdAt: string;
+}
+
+export interface UploadAssetResponse {
+  asset: AssetSummary;
+}
+
+export interface ListAssetsResponse {
+  items: AssetSummary[];
+}
+
+export interface DeleteAssetResponse {
+  assetId: string;
+  message: string;
+}
+
 export interface AuditCheckInput {
   draftId: string;
 }

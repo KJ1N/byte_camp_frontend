@@ -8,7 +8,8 @@ export interface ApiFetchInit extends RequestInit {
 
 export async function apiFetch(path: string, init?: ApiFetchInit) {
   const headers = new Headers(init?.headers);
-  if (!headers.has("Content-Type")) {
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
+  if (!isFormData && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   if (init?.authToken) {

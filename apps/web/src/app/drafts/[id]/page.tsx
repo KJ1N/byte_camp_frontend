@@ -7,11 +7,13 @@ import type {
   DraftDetail,
   DraftVersionSummary,
   RestoreDraftVersionResponse,
+  AssetSummary,
   RichTextDocument,
   RichTextNode,
 } from "@bytecamp-aigc/shared";
 
 import { AiWritingAssistant } from "@/components/ai-writing-assistant";
+import { AssetPanel } from "@/components/asset-panel";
 import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
@@ -35,6 +37,8 @@ const emptyDoc: RichTextDocument = replaceWithPlainText("");
 
 const assistantSuggestion =
   "可以补充一个具体案例，说明创作者如何从选题、生成、编辑、审核到发布形成闭环，让文章更有说服力。";
+
+type SidePanelTab = "ai" | "suggestions" | "assets";
 
 function textFromNode(node: RichTextNode): string {
   return [node.text ?? "", ...(node.content ?? []).map((child) => textFromNode(child))].join("");
@@ -76,6 +80,13 @@ export default function DraftEditorPage() {
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [restoreMessage, setRestoreMessage] = useState("");
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
+  const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("ai");
+  const [imageInsertRequest, setImageInsertRequest] = useState<{
+    id: string;
+    src: string;
+    alt?: string;
+    assetId?: string;
+  } | null>(null);
 
   const bodyText = useMemo(() => plainTextFromRichText(body), [body]);
   const wordCount = useMemo(() => bodyText.length, [bodyText]);
@@ -373,6 +384,17 @@ export default function DraftEditorPage() {
     updateBody(appendPlainTextParagraph(body, text));
   }
 
+  function insertAssetImage(asset: AssetSummary) {
+    setImageInsertRequest({
+      id: `${asset.id}-${Date.now()}`,
+      src: asset.url,
+      alt: asset.metadata.originalName || asset.filename,
+      assetId: asset.id,
+    });
+    setDirty(true);
+    setRestoreMessage("图片素材已插入正文，保存草稿后会同步到服务器。");
+  }
+
   function restoreOfflineDraft() {
     const payload = readDraftOfflineState(window.localStorage, draftId);
     if (!payload) return;
@@ -548,7 +570,7 @@ export default function DraftEditorPage() {
                 />
               </div>
 
-              <RichTextEditor value={body} onChange={updateBody} />
+              <RichTextEditor value={body} insertImageRequest={imageInsertRequest} onChange={updateBody} />
             </>
           )}
 
@@ -709,70 +731,95 @@ export default function DraftEditorPage() {
             </div>
           </div>
         </aside>
-        <AiWritingAssistant
-          authToken={token}
-          topic={title || draft?.title || "草稿编辑"}
-          audience="内容创作者"
-          style="头条资讯"
-          currentTitle={title}
-          bodyText={bodyText}
-          previewTitle={title}
-          previewBodyText={bodyText}
-          onSelectTitle={updateTitle}
-          onReplaceBody={replaceDraftBody}
-          onAppendBody={appendDraftBody}
-          footer={
-            <>
-              {restoreMessage ? (
-                <div className="rounded-md border border-[#d8ead8] bg-[#f5fbf5] px-4 py-3 text-sm text-[#2f6b37]">
-                  {restoreMessage}
-                </div>
-              ) : null}
-              <div className="border-t border-[#eeeeee] pt-5">
-                <div className="mb-3 text-sm font-semibold text-[#4e5661]">版本记录</div>
-                <div className="grid gap-2">
-                  {versions.map((version) => (
-                    <div
-                      className={[
-                        "rounded-md border bg-white px-3 py-2 text-sm transition",
-                        selectedVersionId === version.id ? "border-[#ffb2b3]" : "border-[#eeeeee]",
-                      ].join(" ")}
-                      key={version.id}
-                    >
-                      <button
-                        className="w-full cursor-pointer text-left"
-                        type="button"
-                        onClick={() => setSelectedVersionId(selectedVersionId === version.id ? null : version.id)}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="font-medium text-[#1f2329]">v{version.version}</div>
-                          <div className="text-xs text-[#8f959e]">{formatTime(version.createdAt)}</div>
-                        </div>
-                        <div className="mt-1 truncate text-xs text-[#6b7280]">{version.title}</div>
-                      </button>
-                      {selectedVersionId === version.id ? (
-                        <div className="mt-3 border-t border-[#f0f0f0] pt-3">
-                          <p className="max-h-24 overflow-hidden text-xs leading-6 text-[#6b7280]">
-                            {textFromDoc(version.snapshot) || "该版本暂无正文内容"}
-                          </p>
-                          <button
-                            className="mt-3 cursor-pointer rounded-md bg-[#fff1f1] px-3 py-2 text-xs font-semibold text-[#ff4d4f] disabled:text-[#d6a4a5]"
-                            disabled={Boolean(restoringVersionId)}
-                            type="button"
-                            onClick={() => void restoreServerVersion(version)}
-                          >
-                            {restoringVersionId === version.id ? "恢复中..." : "恢复此版本"}
-                          </button>
-                        </div>
-                      ) : null}
+        <div className="grid h-fit gap-3">
+          <div className="flex rounded-lg bg-white p-1 text-sm font-semibold">
+            {[
+              { id: "ai", label: "AI 创作" },
+              { id: "assets", label: "素材" },
+            ].map((item) => (
+              <button
+                className={[
+                  "min-w-0 flex-1 rounded-md px-3 py-2",
+                  sidePanelTab === item.id ? "bg-[#fff1f1] text-[#ff4d4f]" : "text-[#6b7280] hover:bg-[#f6f7f9]",
+                ].join(" ")}
+                key={item.id}
+                type="button"
+                onClick={() => setSidePanelTab(item.id as SidePanelTab)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {sidePanelTab === "assets" ? (
+            <AssetPanel authToken={token} onInsertImage={insertAssetImage} />
+          ) : (
+            <AiWritingAssistant
+              authToken={token}
+              topic={title || draft?.title || "草稿编辑"}
+              audience="内容创作者"
+              style="头条资讯"
+              currentTitle={title}
+              bodyText={bodyText}
+              previewTitle={title}
+              previewBodyText={bodyText}
+              onSelectTitle={updateTitle}
+              onReplaceBody={replaceDraftBody}
+              onAppendBody={appendDraftBody}
+              footer={
+                <>
+                  {restoreMessage ? (
+                    <div className="rounded-md border border-[#d8ead8] bg-[#f5fbf5] px-4 py-3 text-sm text-[#2f6b37]">
+                      {restoreMessage}
                     </div>
-                  ))}
-                  {!versions.length ? <div className="text-sm text-[#8f959e]">暂无版本记录</div> : null}
-                </div>
-              </div>
-            </>
-          }
-        />
+                  ) : null}
+                  <div className="border-t border-[#eeeeee] pt-5">
+                    <div className="mb-3 text-sm font-semibold text-[#4e5661]">版本记录</div>
+                    <div className="grid gap-2">
+                      {versions.map((version) => (
+                        <div
+                          className={[
+                            "rounded-md border bg-white px-3 py-2 text-sm transition",
+                            selectedVersionId === version.id ? "border-[#ffb2b3]" : "border-[#eeeeee]",
+                          ].join(" ")}
+                          key={version.id}
+                        >
+                          <button
+                            className="w-full cursor-pointer text-left"
+                            type="button"
+                            onClick={() => setSelectedVersionId(selectedVersionId === version.id ? null : version.id)}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="font-medium text-[#1f2329]">v{version.version}</div>
+                              <div className="text-xs text-[#8f959e]">{formatTime(version.createdAt)}</div>
+                            </div>
+                            <div className="mt-1 truncate text-xs text-[#6b7280]">{version.title}</div>
+                          </button>
+                          {selectedVersionId === version.id ? (
+                            <div className="mt-3 border-t border-[#f0f0f0] pt-3">
+                              <p className="max-h-24 overflow-hidden text-xs leading-6 text-[#6b7280]">
+                                {textFromDoc(version.snapshot) || "该版本暂无正文内容"}
+                              </p>
+                              <button
+                                className="mt-3 cursor-pointer rounded-md bg-[#fff1f1] px-3 py-2 text-xs font-semibold text-[#ff4d4f] disabled:text-[#d6a4a5]"
+                                disabled={Boolean(restoringVersionId)}
+                                type="button"
+                                onClick={() => void restoreServerVersion(version)}
+                              >
+                                {restoringVersionId === version.id ? "恢复中..." : "恢复此版本"}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                      {!versions.length ? <div className="text-sm text-[#8f959e]">暂无版本记录</div> : null}
+                    </div>
+                  </div>
+                </>
+              }
+            />
+          )}
+        </div>
       </div>
     </main>
   );

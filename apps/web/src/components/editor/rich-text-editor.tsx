@@ -14,6 +14,12 @@ import { richTextEditorContentClass } from "./rich-text-editor-style";
 interface RichTextEditorProps {
   value: RichTextDocument;
   onChange: (value: RichTextDocument) => void;
+  insertImageRequest?: {
+    id: string;
+    src: string;
+    alt?: string;
+    assetId?: string;
+  } | null;
 }
 
 type ToolbarAction =
@@ -53,7 +59,7 @@ const toolbarGroups: Array<Array<{ label: string; action: ToolbarAction; title: 
   ],
 ];
 
-export function RichTextEditor({ value, onChange }: RichTextEditorProps) {
+export function RichTextEditor({ value, onChange, insertImageRequest }: RichTextEditorProps) {
   const normalizedValue = useMemo(() => normalizeRichTextDocument(value), [value]);
   const editor = useEditor({
     extensions: [
@@ -91,6 +97,19 @@ export function RichTextEditor({ value, onChange }: RichTextEditorProps) {
       editor.commands.setContent(normalizedValue as unknown as JSONContent, { emitUpdate: false });
     }
   }, [editor, normalizedValue]);
+
+  useEffect(() => {
+    if (!editor || !insertImageRequest?.src) return;
+    editor
+      .chain()
+      .focus()
+      .setImage({
+        src: insertImageRequest.src,
+        alt: insertImageRequest.alt,
+        assetId: insertImageRequest.assetId,
+      } as never)
+      .run();
+  }, [editor, insertImageRequest]);
 
   function run(action: ToolbarAction) {
     if (!editor) return;
