@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { EngagementEventType } from "@bytecamp-aigc/shared";
+import type { RankingCacheService } from "../ranking/ranking-cache.service";
 import { AnalyticsService } from "./analytics.service";
 
 function createService(options?: { articleExists?: boolean; initialEvents?: Array<{ type: string; value: number }> }) {
   const calls = {
     createdEvents: [] as Array<{ articleId: string; type: string; userKey?: string | null; value: number }>,
+    rankingInvalidations: 0,
   };
   const events = [...(options?.initialEvents ?? [])];
 
@@ -23,9 +25,15 @@ function createService(options?: { articleExists?: boolean; initialEvents?: Arra
       findMany: async () => events,
     },
   };
+  const rankingCache = {
+    invalidateRankings: async () => {
+      calls.rankingInvalidations += 1;
+      return true;
+    },
+  };
 
   return {
-    service: new AnalyticsService(prisma as never),
+    service: new AnalyticsService(prisma as never, rankingCache as unknown as RankingCacheService),
     calls,
   };
 }
@@ -59,6 +67,7 @@ describe("AnalyticsService", () => {
         value: 1,
       },
     ]);
+    assert.equal(calls.rankingInvalidations, 1);
   });
 
   it("rejects engagement events for missing or unpublished articles", async () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ArticleStatus, EngagementEventType } from "@bytecamp-aigc/shared";
+import type { RankingCacheEntry, RankingKind } from "../ranking/ranking-cache.service";
 import { RankingService } from "../ranking/ranking.service";
 import { FeedService } from "./feed.service";
 
@@ -45,7 +46,29 @@ const articles = [
   },
 ];
 
-function createService() {
+function createRankingCache(options: { ids?: string[] | null; failGet?: boolean } = {}) {
+  const calls = {
+    getRankedArticleIds: [] as Array<{ kind: RankingKind; offset: number; limit: number }>,
+    replaceRanking: [] as Array<{ kind: RankingKind; entries: RankingCacheEntry[] }>,
+  };
+
+  return {
+    cache: {
+      getRankedArticleIds: async (kind: RankingKind, offset: number, limit: number) => {
+        calls.getRankedArticleIds.push({ kind, offset, limit });
+        if (options.failGet) throw new Error("redis down");
+        return options.ids ?? null;
+      },
+      replaceRanking: async (kind: RankingKind, entries: RankingCacheEntry[]) => {
+        calls.replaceRanking.push({ kind, entries });
+        return true;
+      },
+    },
+    calls,
+  };
+}
+
+function createService(cache?: ReturnType<typeof createRankingCache>["cache"]) {
   const calls = {
     articleQueries: [] as Array<{ where?: unknown }>,
     snapshots: [] as Array<{ name: string; payload: unknown }>,
@@ -53,8 +76,11 @@ function createService() {
 
   const prisma = {
     article: {
-      findMany: async (query: { where?: unknown }) => {
+      findMany: async (query: { where?: { id?: { in?: string[] } } }) => {
         calls.articleQueries.push(query);
+        if (query.where?.id?.in) {
+          return articles.filter((article) => query.where?.id?.in?.includes(article.id));
+        }
         return articles;
       },
     },
@@ -67,7 +93,7 @@ function createService() {
   };
 
   return {
-    service: new FeedService(prisma as never, new RankingService()),
+    service: new FeedService(prisma as never, new RankingService(), cache as never),
     calls,
   };
 }
@@ -116,5 +142,56 @@ describe("FeedService", () => {
 
     assert.deepEqual(result.items.map((item) => item.id), ["article-hot", "article-quality", "article-low"]);
     assert.ok(result.items[0].ranking.rankScore > result.items[1].ranking.rankScore);
+  });
+
+  it("uses cached article ids for ranking order and still loads published article details from PostgreSQL", async () => {
+    const { cache, calls: cacheCalls } = createRankingCache({ ids: ["article-quality", "article-hot"] });
+    const { service, calls } = createService(cache);
+
+    const result = await service.listRanking("hot", {
+      limit: 2,
+      cursor: "0",
+      now: new Date("2026-06-05T12:00:00.000Z"),
+    });
+
+    assert.deepEqual(result.items.map((item) => item.id), ["article-quality", "article-hot"]);
+    assert.deepEqual(cacheCalls.getRankedArticleIds, [{ kind: "hot", offset: 0, limit: 2 }]);
+    assert.deepEqual(cacheCalls.replaceRanking, []);
+    assert.deepEqual(calls.articleQueries[0].where, {
+      status: ArticleStatus.Published,
+      id: { in: ["article-quality", "article-hot"] },
+    });
+  });
+
+  it("writes fallback ranking results into Redis when the cache is empty", async () => {
+    const { cache, calls: cacheCalls } = createRankingCache({ ids: null });
+    const { service } = createService(cache);
+
+    await service.listRanking("top", {
+      limit: 3,
+      now: new Date("2026-06-05T12:00:00.000Z"),
+    });
+
+    assert.equal(cacheCalls.replaceRanking.length, 1);
+    assert.equal(cacheCalls.replaceRanking[0].kind, "top");
+    assert.deepEqual(cacheCalls.replaceRanking[0].entries.map((entry) => entry.articleId), [
+      "article-hot",
+      "article-quality",
+      "article-low",
+    ]);
+    assert.ok(cacheCalls.replaceRanking[0].entries[0].score > cacheCalls.replaceRanking[0].entries[1].score);
+  });
+
+  it("falls back to PostgreSQL ranking when Redis read fails", async () => {
+    const { cache, calls: cacheCalls } = createRankingCache({ failGet: true });
+    const { service } = createService(cache);
+
+    const result = await service.listRanking("hot", {
+      limit: 3,
+      now: new Date("2026-06-05T12:00:00.000Z"),
+    });
+
+    assert.deepEqual(result.items.map((item) => item.id), ["article-hot", "article-quality", "article-low"]);
+    assert.equal(cacheCalls.replaceRanking.length, 1);
   });
 });

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ArticleStatus, AuditDecision, DraftMode, DraftStatus, type RichTextDocument } from "@bytecamp-aigc/shared";
 import { AuditService } from "../audit/audit.service";
+import type { RankingCacheService } from "../ranking/ranking-cache.service";
+import { RankingService } from "../ranking/ranking.service";
 import { ScoringService } from "../scoring/scoring.service";
 import { PublishService } from "./publish.service";
 
@@ -117,6 +119,7 @@ function createService(
     }>,
     revisions: [] as Array<{ title: string; body: RichTextDocument; reason?: string }>,
     draftUpdates: [] as Array<{ status: DraftStatus }>,
+    rankingInvalidations: 0,
   };
 
   const tx = {
@@ -235,9 +238,21 @@ function createService(
       return new ScoringService().scoreArticle(input);
     },
   };
+  const rankingCache = {
+    invalidateRankings: async () => {
+      calls.rankingInvalidations += 1;
+      return true;
+    },
+  };
 
   return {
-    service: new PublishService(prisma as never, auditService, scoringService as never),
+    service: new PublishService(
+      prisma as never,
+      auditService,
+      scoringService as never,
+      new RankingService(),
+      rankingCache as unknown as RankingCacheService,
+    ),
     calls,
   };
 }
@@ -254,6 +269,7 @@ function createWithdrawService(
 ) {
   const calls = {
     articleUpdates: [] as Array<{ id: string; status: ArticleStatus }>,
+    removedArticles: [] as string[],
   };
   const prisma = {
     article: {
@@ -268,9 +284,21 @@ function createWithdrawService(
       },
     },
   };
+  const rankingCache = {
+    removeArticle: async (articleId: string) => {
+      calls.removedArticles.push(articleId);
+      return true;
+    },
+  };
 
   return {
-    service: new PublishService(prisma as never, createAuditService(), new ScoringService()),
+    service: new PublishService(
+      prisma as never,
+      createAuditService(),
+      new ScoringService(),
+      new RankingService(),
+      rankingCache as unknown as RankingCacheService,
+    ),
     calls,
   };
 }
@@ -421,6 +449,7 @@ describe("PublishService", () => {
     assert.deepEqual(calls.draftUpdates, [{ status: DraftStatus.Published }]);
     assert.deepEqual(calls.auditRecordArticleLinks, [{ id: "audit-1", articleId: "article-1" }]);
     assert.deepEqual(calls.qualityScoreArticleLinks, [{ id: "score-1", articleId: "article-1" }]);
+    assert.equal(calls.rankingInvalidations, 1);
   });
 
   it("runs model audit before opening the publish transaction", async () => {
@@ -562,6 +591,7 @@ describe("PublishService", () => {
       message: "文章已撤回，读者将无法继续访问。",
     });
     assert.deepEqual(calls.articleUpdates, [{ id: "article-1", status: ArticleStatus.Withdrawn }]);
+    assert.deepEqual(calls.removedArticles, ["article-1"]);
   });
 
   it("rejects withdrawing another creator's article", async () => {

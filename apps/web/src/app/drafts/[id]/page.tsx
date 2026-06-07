@@ -17,7 +17,12 @@ import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
 import {
   clearDraftOfflineState,
+  createDraftOfflineState,
+  getDraftOfflineStatusText,
+  isDraftOfflineConflict,
   readDraftOfflineState,
+  type DraftOfflineSaveReason,
+  type DraftOfflineState,
   writeDraftOfflineState,
 } from "@/lib/draft-offline-state";
 import {
@@ -63,14 +68,27 @@ export default function DraftEditorPage() {
   const [error, setError] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [hasRecovery, setHasRecovery] = useState(false);
+  const [offlineSnapshot, setOfflineSnapshot] = useState<DraftOfflineState | null>(null);
+  const [isOnline, setIsOnline] = useState(true);
+  const [offlineSyncState, setOfflineSyncState] = useState<
+    "idle" | "local_pending" | "syncing" | "synced" | "sync_failed" | "conflict"
+  >("idle");
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [restoreMessage, setRestoreMessage] = useState("");
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
 
   const bodyText = useMemo(() => plainTextFromRichText(body), [body]);
   const wordCount = useMemo(() => bodyText.length, [bodyText]);
+  const hasLocalPending = hasRecovery || Boolean(offlineSnapshot);
   const canPublish = Boolean(
-    draft && !dirty && !hasRecovery && !restoringVersionId && status !== "saving" && status !== "loading",
+    draft &&
+      !dirty &&
+      !hasLocalPending &&
+      offlineSyncState !== "syncing" &&
+      offlineSyncState !== "conflict" &&
+      !restoringVersionId &&
+      status !== "saving" &&
+      status !== "loading",
   );
 
   useEffect(() => {
@@ -85,6 +103,26 @@ export default function DraftEditorPage() {
 
     void loadDraft(storedToken);
   }, [draftId, router]);
+
+  useEffect(() => {
+    setIsOnline(navigator.onLine);
+
+    function handleOnline() {
+      setIsOnline(true);
+    }
+
+    function handleOffline() {
+      setIsOnline(false);
+    }
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   const loadVersions = useCallback(
     async (authToken: string) => {
@@ -121,13 +159,130 @@ export default function DraftEditorPage() {
     setLastSavedAt(loadedDraft.updatedAt);
     setDirty(false);
     setStatus("idle");
-    setHasRecovery(Boolean(readDraftOfflineState(window.localStorage, draftId)));
+    const localSnapshot = readDraftOfflineState(window.localStorage, draftId);
+    setOfflineSnapshot(localSnapshot);
+    setHasRecovery(Boolean(localSnapshot));
+    setOfflineSyncState(
+      localSnapshot
+        ? isDraftOfflineConflict(localSnapshot, { version: loadedDraft.version, updatedAt: loadedDraft.updatedAt })
+          ? "conflict"
+          : "local_pending"
+        : "idle",
+    );
     void loadVersions(authToken);
   }
+
+  const writeLocalDraftSnapshot = useCallback(
+    (reason: DraftOfflineSaveReason) => {
+      if (!draft) return null;
+
+      const snapshot = createDraftOfflineState({
+        draftId: draft.id,
+        title,
+        body,
+        baseVersion: draft.version,
+        serverUpdatedAt: draft.updatedAt,
+        localUpdatedAt: new Date().toISOString(),
+        reason,
+      });
+
+      writeDraftOfflineState(window.localStorage, draft.id, snapshot);
+      setOfflineSnapshot(snapshot);
+      setHasRecovery(true);
+      setOfflineSyncState(reason === "sync_failed" ? "sync_failed" : "local_pending");
+
+      return snapshot;
+    },
+    [body, draft, title],
+  );
+
+  const syncOfflineDraft = useCallback(
+    async (force = false) => {
+      if (!token || !draft || status === "saving") return;
+
+      const snapshot = offlineSnapshot ?? readDraftOfflineState(window.localStorage, draft.id);
+      if (!snapshot) return;
+
+      if (!force && isDraftOfflineConflict(snapshot, { version: draft.version, updatedAt: draft.updatedAt })) {
+        setOfflineSyncState("conflict");
+        setHasRecovery(true);
+        setOfflineSnapshot(snapshot);
+        return;
+      }
+
+      setStatus("saving");
+      setOfflineSyncState("syncing");
+      setError("");
+
+      try {
+        const response = await apiFetch(`/drafts/${draft.id}`, {
+          method: "PATCH",
+          authToken: token,
+          body: JSON.stringify({ title: snapshot.title, body: snapshot.body }),
+        });
+        const payload = await readApiJson<DraftDetail | { message?: string | string[] }>(response);
+
+        if (response.status === 401) {
+          clearAuthSession();
+          router.push("/login");
+          return;
+        }
+
+        if (!response.ok || !payload || "message" in payload) {
+          const failedSnapshot = createDraftOfflineState({
+            ...snapshot,
+            localUpdatedAt: new Date().toISOString(),
+            reason: "sync_failed",
+          });
+          writeDraftOfflineState(window.localStorage, draft.id, failedSnapshot);
+          setOfflineSnapshot(failedSnapshot);
+          setHasRecovery(true);
+          setOfflineSyncState("sync_failed");
+          setError(getApiErrorMessage(payload, "本地暂存同步失败，请稍后重试。"));
+          setStatus("idle");
+          return;
+        }
+
+        const savedDraft = payload as DraftDetail;
+        setDraft(savedDraft);
+        setTitle(savedDraft.title);
+        setBody(savedDraft.body);
+        setLastSavedAt(savedDraft.updatedAt);
+        setDirty(false);
+        setHasRecovery(false);
+        setOfflineSnapshot(null);
+        setOfflineSyncState("synced");
+        setRestoreMessage("本地暂存内容已同步到服务器。");
+        clearDraftOfflineState(window.localStorage, draft.id);
+        setStatus("idle");
+        void loadVersions(token);
+      } catch {
+        const failedSnapshot = createDraftOfflineState({
+          ...snapshot,
+          localUpdatedAt: new Date().toISOString(),
+          reason: "sync_failed",
+        });
+        writeDraftOfflineState(window.localStorage, draft.id, failedSnapshot);
+        setOfflineSnapshot(failedSnapshot);
+        setHasRecovery(true);
+        setOfflineSyncState("sync_failed");
+        setError("本地暂存同步失败，请稍后重试。");
+        setStatus("idle");
+      }
+    },
+    [draft, loadVersions, offlineSnapshot, router, status, token],
+  );
 
   const saveDraft = useCallback(
     async (reason: "manual" | "auto" = "manual") => {
       if (!token || !draft || status === "saving") return;
+
+      if (!navigator.onLine) {
+        writeLocalDraftSnapshot("offline");
+        setError(reason === "auto" ? "当前离线，自动保存内容已暂存到本地。" : "当前离线，内容已暂存到本地。");
+        setStatus("idle");
+        return;
+      }
 
       setStatus("saving");
       setError("");
@@ -142,8 +297,7 @@ export default function DraftEditorPage() {
 
         if (!response.ok || !payload || "message" in payload) {
           const message = getApiErrorMessage(payload, reason === "auto" ? "自动保存失败，已暂存到本地。" : "保存失败，请稍后重试。");
-          writeDraftOfflineState(window.localStorage, draft.id, { title, body });
-          setHasRecovery(true);
+          writeLocalDraftSnapshot("save_failed");
           setError(message);
           setStatus("idle");
           return;
@@ -156,18 +310,39 @@ export default function DraftEditorPage() {
         setLastSavedAt(savedDraft.updatedAt);
         setDirty(false);
         setHasRecovery(false);
+        setOfflineSnapshot(null);
+        setOfflineSyncState("idle");
         clearDraftOfflineState(window.localStorage, draft.id);
         setStatus("idle");
         void loadVersions(token);
       } catch {
-        writeDraftOfflineState(window.localStorage, draft.id, { title, body });
-        setHasRecovery(true);
+        writeLocalDraftSnapshot("save_failed");
         setError(reason === "auto" ? "自动保存失败，已暂存到本地。" : "保存失败，已暂存到本地。");
         setStatus("idle");
       }
     },
-    [body, draft, loadVersions, status, title, token],
+    [draft, loadVersions, status, title, token, writeLocalDraftSnapshot],
   );
+
+  useEffect(() => {
+    if (
+      !isOnline ||
+      !offlineSnapshot ||
+      offlineSyncState !== "local_pending" ||
+      dirty ||
+      status === "saving" ||
+      !draft
+    ) {
+      return;
+    }
+
+    if (isDraftOfflineConflict(offlineSnapshot, { version: draft.version, updatedAt: draft.updatedAt })) {
+      setOfflineSyncState("conflict");
+      return;
+    }
+
+    void syncOfflineDraft(false);
+  }, [dirty, draft, isOnline, offlineSnapshot, offlineSyncState, status, syncOfflineDraft]);
 
   useEffect(() => {
     if (!dirty || status === "saving" || restoringVersionId) return;
@@ -205,8 +380,18 @@ export default function DraftEditorPage() {
     setTitle(payload.title);
     setBody(payload.body);
     setDirty(true);
-    setHasRecovery(false);
+    setOfflineSnapshot(payload);
+    setHasRecovery(true);
+    setOfflineSyncState("local_pending");
     setRestoreMessage("已恢复本地暂存内容，请保存到服务器后再发布。");
+  }
+
+  function discardOfflineDraft() {
+    clearDraftOfflineState(window.localStorage, draftId);
+    setOfflineSnapshot(null);
+    setHasRecovery(false);
+    setOfflineSyncState("idle");
+    setRestoreMessage("已放弃本地暂存内容，页面继续使用服务器草稿。");
   }
 
   async function restoreServerVersion(version: DraftVersionSummary) {
@@ -310,12 +495,47 @@ export default function DraftEditorPage() {
                 </div>
               ) : null}
 
-              {hasRecovery ? (
+              {!isOnline ? (
+                <div className="mx-8 mt-6 rounded-md border border-[#d8e2f2] bg-[#f6f9ff] px-4 py-3 text-sm text-[#355581]">
+                  当前处于离线状态，草稿会先保存在本地，恢复网络后再同步到服务器。
+                </div>
+              ) : null}
+
+              {offlineSnapshot ? (
                 <div className="mx-8 mt-6 flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#ffe0ad] bg-[#fffaf0] px-4 py-3 text-sm text-[#8a5a00]">
-                  <span>检测到本地未同步内容，可以恢复后再保存。</span>
-                  <button className="font-semibold text-[#ff4d4f]" type="button" onClick={restoreOfflineDraft}>
-                    恢复本地内容
-                  </button>
+                  <span>
+                    {offlineSyncState === "conflict"
+                      ? "检测到本地暂存内容，但服务器草稿已有更新。请确认是否覆盖同步。"
+                      : offlineSyncState === "syncing"
+                        ? "正在把本地暂存内容同步到服务器..."
+                        : getDraftOfflineStatusText(offlineSnapshot)}
+                  </span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      className="font-semibold text-[#ff4d4f] disabled:text-[#d6a4a5]"
+                      disabled={offlineSyncState === "syncing"}
+                      type="button"
+                      onClick={restoreOfflineDraft}
+                    >
+                      恢复到页面
+                    </button>
+                    <button
+                      className="font-semibold text-[#ff4d4f] disabled:text-[#d6a4a5]"
+                      disabled={!isOnline || offlineSyncState === "syncing"}
+                      type="button"
+                      onClick={() => void syncOfflineDraft(offlineSyncState === "conflict")}
+                    >
+                      {offlineSyncState === "conflict" ? "覆盖同步" : "立即同步"}
+                    </button>
+                    <button
+                      className="font-semibold text-[#6b7280] disabled:text-[#d6a4a5]"
+                      disabled={offlineSyncState === "syncing"}
+                      type="button"
+                      onClick={discardOfflineDraft}
+                    >
+                      放弃暂存
+                    </button>
+                  </div>
                 </div>
               ) : null}
 
@@ -339,11 +559,17 @@ export default function DraftEditorPage() {
                   ? "正在恢复历史版本"
                   : status === "saving"
                     ? "草稿保存中"
-                    : hasRecovery
-                      ? "有本地未同步内容"
-                      : dirty
-                        ? "有未保存修改"
-                        : "草稿已保存"}
+                    : offlineSyncState === "syncing"
+                      ? "本地内容同步中"
+                      : offlineSyncState === "conflict"
+                        ? "本地暂存存在冲突"
+                        : hasLocalPending
+                          ? "有本地未同步内容"
+                          : dirty
+                            ? "有未保存修改"
+                            : offlineSyncState === "synced"
+                              ? "本地内容已同步"
+                              : "草稿已保存"}
               </span>
               <span>共 {wordCount} 字</span>
               <span>v{draft?.version ?? "-"}</span>

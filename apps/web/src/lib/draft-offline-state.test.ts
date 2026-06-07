@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { RichTextDocument } from "@bytecamp-aigc/shared";
-import { buildDraftOfflineKey, clearDraftOfflineState, readDraftOfflineState, writeDraftOfflineState } from "./draft-offline-state.ts";
+import {
+  buildDraftOfflineKey,
+  clearDraftOfflineState,
+  createDraftOfflineState,
+  getDraftOfflineStatusText,
+  isDraftOfflineConflict,
+  readDraftOfflineState,
+  writeDraftOfflineState,
+} from "./draft-offline-state.ts";
 
 const body: RichTextDocument = {
   type: "doc",
@@ -30,18 +38,47 @@ describe("draft offline state helpers", () => {
   it("writes and reads a draft snapshot", () => {
     const storage = createStorage();
 
-    writeDraftOfflineState(storage, "draft-1", { title: "本地标题", body });
+    writeDraftOfflineState(
+      storage,
+      "draft-1",
+      createDraftOfflineState({
+        draftId: "draft-1",
+        title: "本地标题",
+        body,
+        baseVersion: 3,
+        serverUpdatedAt: "2026-06-07T10:00:00.000Z",
+        localUpdatedAt: "2026-06-07T10:01:00.000Z",
+        reason: "offline",
+      }),
+    );
 
     assert.deepEqual(readDraftOfflineState(storage, "draft-1"), {
+      draftId: "draft-1",
       title: "本地标题",
       body,
+      baseVersion: 3,
+      serverUpdatedAt: "2026-06-07T10:00:00.000Z",
+      localUpdatedAt: "2026-06-07T10:01:00.000Z",
+      reason: "offline",
     });
   });
 
   it("clears a draft snapshot", () => {
     const storage = createStorage();
 
-    writeDraftOfflineState(storage, "draft-1", { title: "本地标题", body });
+    writeDraftOfflineState(
+      storage,
+      "draft-1",
+      createDraftOfflineState({
+        draftId: "draft-1",
+        title: "本地标题",
+        body,
+        baseVersion: 1,
+        serverUpdatedAt: "2026-06-07T10:00:00.000Z",
+        localUpdatedAt: "2026-06-07T10:01:00.000Z",
+        reason: "save_failed",
+      }),
+    );
     clearDraftOfflineState(storage, "draft-1");
 
     assert.equal(readDraftOfflineState(storage, "draft-1"), null);
@@ -60,7 +97,21 @@ describe("draft offline state helpers", () => {
       },
     };
 
-    assert.doesNotThrow(() => writeDraftOfflineState(storage, "draft-1", { title: "本地标题", body }));
+    assert.doesNotThrow(() =>
+      writeDraftOfflineState(
+        storage,
+        "draft-1",
+        createDraftOfflineState({
+          draftId: "draft-1",
+          title: "本地标题",
+          body,
+          baseVersion: 1,
+          serverUpdatedAt: "2026-06-07T10:00:00.000Z",
+          localUpdatedAt: "2026-06-07T10:01:00.000Z",
+          reason: "sync_failed",
+        }),
+      ),
+    );
     assert.equal(readDraftOfflineState(storage, "draft-1"), null);
     assert.doesNotThrow(() => clearDraftOfflineState(storage, "draft-1"));
   });
@@ -70,5 +121,58 @@ describe("draft offline state helpers", () => {
     storage.setItem(buildDraftOfflineKey("draft-1"), "{broken");
 
     assert.equal(readDraftOfflineState(storage, "draft-1"), null);
+  });
+
+  it("normalizes legacy snapshots without version metadata", () => {
+    const storage = createStorage();
+    storage.setItem(buildDraftOfflineKey("draft-1"), JSON.stringify({ title: "旧标题", body }));
+
+    assert.deepEqual(readDraftOfflineState(storage, "draft-1"), {
+      draftId: "draft-1",
+      title: "旧标题",
+      body,
+      baseVersion: null,
+      serverUpdatedAt: null,
+      localUpdatedAt: "",
+      reason: "save_failed",
+    });
+  });
+
+  it("detects conflict when local snapshot is based on an older server version", () => {
+    const state = createDraftOfflineState({
+      draftId: "draft-1",
+      title: "本地标题",
+      body,
+      baseVersion: 2,
+      serverUpdatedAt: "2026-06-07T10:00:00.000Z",
+      localUpdatedAt: "2026-06-07T10:02:00.000Z",
+      reason: "offline",
+    });
+
+    assert.equal(isDraftOfflineConflict(state, { version: 3, updatedAt: "2026-06-07T10:03:00.000Z" }), true);
+    assert.equal(isDraftOfflineConflict(state, { version: 2, updatedAt: "2026-06-07T10:00:00.000Z" }), false);
+  });
+
+  it("treats legacy snapshots as requiring confirmation before sync", () => {
+    const storage = createStorage();
+    storage.setItem(buildDraftOfflineKey("draft-1"), JSON.stringify({ title: "旧标题", body }));
+    const state = readDraftOfflineState(storage, "draft-1");
+
+    assert.ok(state);
+    assert.equal(isDraftOfflineConflict(state, { version: 1, updatedAt: "2026-06-07T10:00:00.000Z" }), true);
+  });
+
+  it("summarizes why a local snapshot is pending", () => {
+    const state = createDraftOfflineState({
+      draftId: "draft-1",
+      title: "本地标题",
+      body,
+      baseVersion: 1,
+      serverUpdatedAt: "2026-06-07T10:00:00.000Z",
+      localUpdatedAt: "2026-06-07T10:02:00.000Z",
+      reason: "offline",
+    });
+
+    assert.equal(getDraftOfflineStatusText(state), "离线编辑内容已暂存到本地，恢复网络后会尝试同步。");
   });
 });

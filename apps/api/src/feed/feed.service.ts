@@ -8,7 +8,8 @@ import {
   type CursorPageResponse,
 } from "@bytecamp-aigc/shared";
 import { PrismaService } from "../prisma/prisma.service";
-import { RankingService } from "../ranking/ranking.service";
+import { RankingCacheService, type RankingCacheEntry } from "../ranking/ranking-cache.service";
+import { RankingService, type RankableArticleInput } from "../ranking/ranking.service";
 
 export type RankingKind = "hot" | "top";
 
@@ -36,6 +37,7 @@ export class FeedService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly rankingService: RankingService,
+    private readonly rankingCacheService?: RankingCacheService,
   ) {}
 
   async listFeed(options: ListArticlesOptions = {}): Promise<CursorPageResponse<ArticleListItem>> {
@@ -50,6 +52,9 @@ export class FeedService {
 
   async listRanking(kind: RankingKind, options: ListArticlesOptions = {}): Promise<CursorPageResponse<ArticleListItem>> {
     const now = options.now ?? new Date();
+    const cached = await this.listCachedRanking(kind, options, now);
+    if (cached) return cached;
+
     const candidates = await this.getPublishedArticleCandidates();
     const sorted =
       kind === "hot"
@@ -58,6 +63,7 @@ export class FeedService {
     const items = sorted.map(({ article, ranking }) => this.toListItem(article, ranking));
     const page = this.paginate(items, options);
 
+    await this.rankingCacheService?.replaceRanking(kind, this.toCacheEntries(kind, sorted, now));
     await this.recordSnapshot(kind, page.items, now);
 
     return page;
@@ -93,6 +99,73 @@ export class FeedService {
         publishedAt: article.publishedAt,
       };
     });
+  }
+
+  private async listCachedRanking(
+    kind: RankingKind,
+    options: ListArticlesOptions,
+    now: Date,
+  ): Promise<CursorPageResponse<ArticleListItem> | null> {
+    if (!this.rankingCacheService) return null;
+
+    const limit = this.normalizeLimit(options.limit);
+    const offset = this.normalizeCursor(options.cursor);
+
+    try {
+      const ids = await this.rankingCacheService.getRankedArticleIds(kind, offset, limit);
+      if (!ids?.length) return null;
+
+      const articles = await this.getPublishedArticlesByIds(ids);
+      if (!articles.length) return null;
+
+      const byId = new Map(articles.map((article) => [article.id, article]));
+      const items = ids
+        .map((id) => byId.get(id))
+        .filter((article): article is PublishedArticleRecord => Boolean(article))
+        .map((article) => {
+          const engagement = this.statsFromEvents(article.events);
+          const qualityScore = article.scores[0]?.overall ?? 0;
+          const ranking = this.rankingService.calculateBreakdown({
+            qualityScore,
+            views: engagement.views,
+            likes: engagement.likes,
+            favorites: engagement.favorites,
+            publishedAt: article.publishedAt,
+            now,
+          });
+
+          return this.toListItem(article, ranking);
+        });
+
+      if (!items.length) return null;
+
+      const page = {
+        items,
+        nextCursor: items.length === limit ? String(offset + items.length) : undefined,
+      };
+      await this.recordSnapshot(kind, page.items, now);
+      return page;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getPublishedArticlesByIds(ids: string[]) {
+    return (await this.prisma.article.findMany({
+      where: {
+        status: ArticleStatus.Published,
+        id: { in: ids },
+      },
+      include: {
+        author: { select: { id: true, nickname: true } },
+        scores: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { overall: true },
+        },
+        events: { select: { type: true, value: true } },
+      },
+    })) as PublishedArticleRecord[];
   }
 
   private toListItem(
@@ -146,6 +219,17 @@ export class FeedService {
     const parsed = Number.parseInt(cursor ?? "0", 10);
     if (!Number.isFinite(parsed) || parsed < 0) return 0;
     return parsed;
+  }
+
+  private toCacheEntries(
+    kind: RankingKind,
+    items: Array<RankableArticleInput & { ranking: ArticleListItem["ranking"] }>,
+    now: Date,
+  ): RankingCacheEntry[] {
+    return items.map((item) => ({
+      articleId: item.id,
+      score: kind === "hot" ? this.rankingService.calculateHotRank(item, now) : item.ranking.rankScore,
+    }));
   }
 
   private async recordSnapshot(kind: RankingKind, items: ArticleListItem[], now: Date) {

@@ -7,10 +7,14 @@ import {
   type CreateEngagementEventResponse,
 } from "@bytecamp-aigc/shared";
 import { PrismaService } from "../prisma/prisma.service";
+import { RankingCacheService } from "../ranking/ranking-cache.service";
 
 @Injectable()
 export class AnalyticsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rankingCacheService?: RankingCacheService,
+  ) {}
 
   async recordEvent(articleId: string, input: CreateEngagementEventInput): Promise<CreateEngagementEventResponse> {
     if (!this.isSupportedEventType(input.type)) {
@@ -32,6 +36,7 @@ export class AnalyticsService {
         value: 1,
       },
     });
+    await this.rankingCacheService?.invalidateRankings();
 
     return {
       articleId,

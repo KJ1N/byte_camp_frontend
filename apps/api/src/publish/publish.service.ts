@@ -18,6 +18,7 @@ import {
 } from "@bytecamp-aigc/shared";
 import { AuditService } from "../audit/audit.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { RankingCacheService } from "../ranking/ranking-cache.service";
 import { RankingService } from "../ranking/ranking.service";
 import { ScoringService } from "../scoring/scoring.service";
 
@@ -28,6 +29,7 @@ export class PublishService {
     private readonly auditService: AuditService,
     private readonly scoringService: ScoringService,
     private readonly rankingService: RankingService = new RankingService(),
+    private readonly rankingCacheService?: RankingCacheService,
   ) {}
 
   async checkDraft(authorId: string, draftId: string): Promise<AuditCheckResponse> {
@@ -130,7 +132,7 @@ export class PublishService {
       safetyScore: this.safetyScoreFor(auditResult.decision),
     });
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction<PublishArticleResponse>(async (tx) => {
       await this.assertDraftUnchanged(tx, draft.id, draft.version);
 
       const audit = await this.createAuditRecord(tx, draft.id, auditResult);
@@ -238,6 +240,12 @@ export class PublishService {
         message: "文章发布成功。",
       };
     });
+
+    if (result.status === "PUBLISHED") {
+      await this.rankingCacheService?.invalidateRankings();
+    }
+
+    return result;
   }
 
   async withdrawArticle(authorId: string, articleId: string): Promise<WithdrawArticleResponse> {
@@ -255,6 +263,7 @@ export class PublishService {
       where: { id: article.id },
       data: { status: ArticleStatus.Withdrawn },
     });
+    await this.rankingCacheService?.removeArticle(article.id);
 
     return {
       articleId: article.id,
