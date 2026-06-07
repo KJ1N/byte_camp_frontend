@@ -95,6 +95,7 @@ function createService(
     existingArticleId?: string;
     draftTitle?: string;
     rejectAuditInsideTransaction?: boolean;
+    rejectScoringInsideTransaction?: boolean;
     transactionDraftVersion?: number;
   } = {},
 ) {
@@ -218,9 +219,18 @@ function createService(
       return createAuditService().checkText(text);
     },
   } as never);
+  const scoringService = {
+    scoreArticle: async (input: { title: string; text: string; safetyScore?: number }) => {
+      if (options.rejectScoringInsideTransaction && inTransaction) {
+        throw new Error("Scoring should run before opening the Prisma transaction");
+      }
+
+      return new ScoringService().scoreArticle(input);
+    },
+  };
 
   return {
-    service: new PublishService(prisma as never, auditService, new ScoringService()),
+    service: new PublishService(prisma as never, auditService, scoringService as never),
     calls,
   };
 }
@@ -375,6 +385,14 @@ describe("PublishService", () => {
 
   it("runs model audit before opening the publish transaction", async () => {
     const { service } = createService(safeBody, { rejectAuditInsideTransaction: true });
+
+    const result = await service.publishDraft("user-1", "draft-1");
+
+    assert.equal(result.status, "PUBLISHED");
+  });
+
+  it("runs model scoring before opening the publish transaction", async () => {
+    const { service } = createService(safeBody, { rejectScoringInsideTransaction: true });
 
     const result = await service.publishDraft("user-1", "draft-1");
 

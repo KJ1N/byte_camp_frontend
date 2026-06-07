@@ -53,6 +53,10 @@ export function shouldDisablePromptEdit(prompt: PromptTemplateSummary, authToken
   return !authToken || !prompt.id;
 }
 
+export function canDeletePrompt(prompt: PromptTemplateSummary, authToken: string | null) {
+  return Boolean(authToken && prompt.id && prompt.owner === PromptOwner.Private);
+}
+
 export function isPromptDraftValid(draft: PromptDraft) {
   const name = draft.name.trim();
   const userTemplate = draft.userTemplate.trim();
@@ -62,4 +66,13 @@ export function isPromptDraftValid(draft: PromptDraft) {
 
 export function nextSelectedPromptIdAfterSave(savedPromptId: string | undefined, currentPromptId: string) {
   return savedPromptId || currentPromptId;
+}
+
+export function nextSelectedPromptIdAfterDelete(
+  deletedPromptId: string,
+  currentPromptId: string,
+  remainingPrompts: PromptTemplateSummary[],
+) {
+  if (deletedPromptId !== currentPromptId) return currentPromptId;
+  return remainingPrompts.find((prompt) => prompt.isStarter)?.id ?? remainingPrompts[0]?.id ?? "";
 }

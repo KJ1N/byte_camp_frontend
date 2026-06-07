@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import type { CopyPromptInput, CreatePromptInput, UpdatePromptInput } from "@bytecamp-aigc/shared";
 import { JwtAuthGuard } from "../auth/auth.guard";
 import { CurrentUser } from "../auth/current-user.decorator";
@@ -40,5 +40,10 @@ export class PromptsController {
     @Body() body: UpdatePromptInput,
   ) {
     return this.promptsService.updatePrivatePrompt(promptId, userId, body);
+  }
+
+  @Delete(":id")
+  deletePrompt(@CurrentUser("userId") userId: string, @Param("id") promptId: string) {
+    return this.promptsService.deletePrivatePrompt(promptId, userId);
   }
 }

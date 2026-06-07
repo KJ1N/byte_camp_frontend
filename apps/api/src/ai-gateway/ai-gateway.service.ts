@@ -8,11 +8,12 @@ import type {
   GeneratedArticleDraft,
   GenerateArticleInput,
   OptimizeTitlesInput,
+  QualityScore,
   RichTextDocument,
   RewriteArticleInput,
   RewriteArticleResponse,
 } from "@bytecamp-aigc/shared";
-import { AuditDecision, RiskCategory } from "@bytecamp-aigc/shared";
+import { AuditDecision, RiskCategory, qualityWeights } from "@bytecamp-aigc/shared";
 import { PromptsService } from "../prompts/prompts.service";
 import { AiProviderClient, type AiChatMessage } from "./ai-provider.client";
 import { AiProviderConfigurationException } from "./ai-gateway.errors";
@@ -21,11 +22,13 @@ import {
   buildArticleGenerationMessages,
   buildComplianceRewriteMessages,
   buildContentAuditMessages,
+  buildQualityScoringMessages,
   buildRewriteMessages,
   buildTitleOptimizationMessages,
   defaultArticleGenerationPrompt,
   parseAuditJson,
   parseArticleGenerationJson,
+  parseQualityScoreJson,
   parseRewriteJson,
   parseTitleOptimizationJson,
   type ArticleGenerationPrompt,
@@ -161,6 +164,20 @@ export class AiGatewayService {
       model: completion.model,
       source: "MODEL",
     });
+  }
+
+  async scoreArticleQuality(input: { title: string; text: string; safetyScore?: number }): Promise<QualityScore> {
+    if (!this.shouldUseLiveProvider()) {
+      return this.scoreMockArticleQuality(input);
+    }
+
+    const providerConfig = this.getRequiredProviderConfig();
+    const completion = await this.getProviderClient().complete({
+      ...providerConfig,
+      messages: buildQualityScoringMessages(input),
+    });
+
+    return parseQualityScoreJson(completion.content, input.safetyScore);
   }
 
   async *streamArticleDraft(input: GenerateArticleInput, userId: string): AsyncGenerator<AiStreamEvent> {
@@ -565,6 +582,30 @@ export class AiGatewayService {
           : "内容存在中风险，需要修改后重审。",
       model: this.getMockModel(),
       source: "MOCK",
+    };
+  }
+
+  private scoreMockArticleQuality(input: { title: string; text: string; safetyScore?: number }): QualityScore {
+    const base = Math.min(95, Math.max(60, Math.round(input.text.length / 20) + 65));
+    const score = {
+      contentValue: base,
+      expressionQuality: base - 2,
+      readerExperience: base - 4,
+      spreadPotential: base - 8,
+      safetyScore: input.safetyScore ?? 95,
+    };
+
+    return {
+      ...score,
+      overall: Math.round(
+        score.contentValue * qualityWeights.contentValue +
+          score.expressionQuality * qualityWeights.expressionQuality +
+          score.readerExperience * qualityWeights.readerExperience +
+          score.spreadPotential * qualityWeights.spreadPotential +
+          score.safetyScore * qualityWeights.safetyScore,
+      ),
+      reasons: ["鍐呭缁撴瀯瀹屾暣", "閫傚悎杩涘叆鍙戝竷鍓嶄汉宸ョ‘璁?"],
+      suggestions: ["琛ュ厖鐪熷疄妗堜緥", "浼樺寲鏍囬鐨勫叿浣撳埄鐩婄偣"],
     };
   }
 

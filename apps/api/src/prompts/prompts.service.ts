@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import {
   PromptOwner,
   type CreatePromptInput,
+  type DeletePromptResponse,
   type ListPromptsResponse,
   type PromptTemplateDetail,
   type PromptTemplateMutationResponse,
@@ -134,6 +135,30 @@ export class PromptsService {
     });
 
     return { prompt: this.toDetail(updated) };
+  }
+
+  async deletePrivatePrompt(promptId: string, userId: string): Promise<DeletePromptResponse> {
+    const prompt = await this.prisma.prompt.findFirst({
+      where: { id: promptId },
+    });
+
+    if (!prompt) {
+      throw new NotFoundException("Prompt template not found");
+    }
+
+    if (prompt.owner !== PromptOwner.Private) {
+      throw new ForbiddenException("Platform prompt templates are readonly");
+    }
+
+    if (prompt.authorId !== userId) {
+      throw new NotFoundException("Prompt template not found");
+    }
+
+    await this.prisma.prompt.delete({
+      where: { id: prompt.id },
+    });
+
+    return { promptId: prompt.id };
   }
 
   async getUsablePrompt(promptId: string, userId: string, category: string): Promise<ArticleGenerationPrompt> {

@@ -1,9 +1,16 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 import { qualityWeights, type QualityScore } from "@bytecamp-aigc/shared";
+import { AiGatewayService } from "../ai-gateway/ai-gateway.service";
 
 @Injectable()
 export class ScoringService {
-  scoreArticle(input: { title: string; text: string; safetyScore?: number }): QualityScore {
+  constructor(@Optional() private readonly aiGatewayService?: AiGatewayService) {}
+
+  async scoreArticle(input: { title: string; text: string; safetyScore?: number }): Promise<QualityScore> {
+    if (this.aiGatewayService) {
+      return this.aiGatewayService.scoreArticleQuality(input);
+    }
+
     const base = Math.min(95, Math.max(60, Math.round(input.text.length / 20) + 65));
     const score = {
       contentValue: base,

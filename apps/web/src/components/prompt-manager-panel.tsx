@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  type DeletePromptResponse,
   PromptOwner,
   type PromptTemplateDetail,
   type PromptTemplateMutationResponse,
@@ -10,6 +11,7 @@ import {
 
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import {
+  canDeletePrompt,
   createDefaultPromptTemplate,
   getPromptEditButtonLabel,
   getPromptEditAction,
@@ -26,6 +28,7 @@ interface PromptManagerPanelProps {
   selectedPromptId: string;
   onSelectPrompt: (promptId: string) => void;
   onPromptSaved: (prompt: PromptTemplateDetail) => void;
+  onPromptDeleted: (promptId: string) => void;
   onError: (message: string) => void;
 }
 
@@ -44,6 +47,7 @@ export function PromptManagerPanel({
   selectedPromptId,
   onSelectPrompt,
   onPromptSaved,
+  onPromptDeleted,
   onError,
 }: PromptManagerPanelProps) {
   const groups = groupPromptTemplates(prompts);
@@ -63,6 +67,7 @@ export function PromptManagerPanel({
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [saving, setSaving] = useState(false);
   const [copyingId, setCopyingId] = useState("");
+  const [deletingId, setDeletingId] = useState("");
 
   function openNewPrompt() {
     setEditor({
@@ -168,6 +173,27 @@ export function PromptManagerPanel({
     });
   }
 
+  async function deletePrompt(prompt: PromptTemplateSummary) {
+    if (!authToken || !canDeletePrompt(prompt, authToken) || deletingId) return;
+    if (!window.confirm("确定删除这个 Prompt 吗？删除后不可恢复。")) return;
+
+    setDeletingId(prompt.id);
+    const response = await apiFetch(`/prompts/${prompt.id}`, {
+      method: "DELETE",
+      authToken,
+    });
+    const payload = await readApiJson<DeletePromptResponse | { message?: string | string[] }>(response);
+    setDeletingId("");
+
+    if (!response.ok || !isDeletePromptResponse(payload)) {
+      onError(getApiErrorMessage(payload, "Prompt 删除失败，请稍后重试。"));
+      return;
+    }
+
+    onPromptDeleted(payload.promptId);
+    setEditor((current) => (current?.promptId === payload.promptId ? null : current));
+  }
+
   const canSave = Boolean(editor && isPromptDraftValid(editor.draft) && !saving);
 
   return (
@@ -191,19 +217,23 @@ export function PromptManagerPanel({
           <PromptGroup
             authToken={authToken}
             copyingId={copyingId}
+            deletingId={deletingId}
             items={groups.platform}
             selectedPromptId={selectedPromptId}
             title="平台默认"
+            onDelete={deletePrompt}
             onEdit={editPrompt}
             onSelect={onSelectPrompt}
           />
           <PromptGroup
             authToken={authToken}
             copyingId={copyingId}
+            deletingId={deletingId}
             emptyText="还没有自定义 Prompt，可从平台模板复制或直接新增。"
             items={groups.private}
             selectedPromptId={selectedPromptId}
             title="我的 Prompt"
+            onDelete={deletePrompt}
             onEdit={editPrompt}
             onSelect={onSelectPrompt}
           />
@@ -213,10 +243,12 @@ export function PromptManagerPanel({
           {visiblePrompts.map((prompt) => (
             <PromptCard
               copyingId={copyingId}
+              deletingId={deletingId}
               key={prompt.id || "default"}
               prompt={prompt}
               selected={selectedPromptId === prompt.id || (!selectedPromptId && !prompt.id)}
               authToken={authToken}
+              onDelete={deletePrompt}
               onEdit={editPrompt}
               onSelect={onSelectPrompt}
             />
@@ -320,18 +352,22 @@ function PromptGroup({
   selectedPromptId,
   authToken,
   copyingId,
+  deletingId,
   emptyText = "暂无模板",
   onSelect,
   onEdit,
+  onDelete,
 }: {
   title: string;
   items: PromptTemplateSummary[];
   selectedPromptId: string;
   authToken: string | null;
   copyingId: string;
+  deletingId: string;
   emptyText?: string;
   onSelect: (promptId: string) => void;
   onEdit: (prompt: PromptTemplateSummary) => void | Promise<void>;
+  onDelete: (prompt: PromptTemplateSummary) => void | Promise<void>;
 }) {
   return (
     <section>
@@ -341,10 +377,12 @@ function PromptGroup({
           {items.map((prompt) => (
             <PromptCard
               copyingId={copyingId}
+              deletingId={deletingId}
               key={prompt.id}
               prompt={prompt}
               selected={selectedPromptId === prompt.id}
               authToken={authToken}
+              onDelete={onDelete}
               onEdit={onEdit}
               onSelect={onSelect}
             />
@@ -364,16 +402,22 @@ function PromptCard({
   selected,
   authToken,
   copyingId,
+  deletingId,
   onSelect,
   onEdit,
+  onDelete,
 }: {
   prompt: PromptTemplateSummary;
   selected: boolean;
   authToken: string | null;
   copyingId: string;
+  deletingId: string;
   onSelect: (promptId: string) => void;
   onEdit: (prompt: PromptTemplateSummary) => void | Promise<void>;
+  onDelete: (prompt: PromptTemplateSummary) => void | Promise<void>;
 }) {
+  const deleteEnabled = canDeletePrompt(prompt, authToken);
+
   return (
     <div
       className={[
@@ -393,14 +437,26 @@ function PromptCard({
         >
           使用
         </button>
-        <button
-          className="rounded-md bg-[#fff1f1] px-2 py-1 text-xs font-semibold text-[#d92d2d] hover:bg-[#ffe7e7] disabled:opacity-45"
-          disabled={shouldDisablePromptEdit(prompt, authToken)}
-          type="button"
-          onClick={() => void onEdit(prompt)}
-        >
-          {getPromptEditButtonLabel(prompt, copyingId)}
-        </button>
+        <div className="flex items-center gap-1.5">
+          {deleteEnabled ? (
+            <button
+              className="rounded-md bg-[#f0f1f3] px-2 py-1 text-xs font-medium text-[#5d6673] hover:bg-[#e7e9ed] disabled:opacity-45"
+              disabled={deletingId === prompt.id}
+              type="button"
+              onClick={() => void onDelete(prompt)}
+            >
+              {deletingId === prompt.id ? "删除中..." : "删除"}
+            </button>
+          ) : null}
+          <button
+            className="rounded-md bg-[#fff1f1] px-2 py-1 text-xs font-semibold text-[#d92d2d] hover:bg-[#ffe7e7] disabled:opacity-45"
+            disabled={shouldDisablePromptEdit(prompt, authToken)}
+            type="button"
+            onClick={() => void onEdit(prompt)}
+          >
+            {getPromptEditButtonLabel(prompt, copyingId)}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -422,4 +478,8 @@ function isPromptMutationResponse(value: unknown): value is PromptTemplateMutati
     typeof value === "object" &&
     isPromptTemplateDetail((value as { prompt?: unknown }).prompt)
   );
+}
+
+function isDeletePromptResponse(value: unknown): value is DeletePromptResponse {
+  return Boolean(value) && typeof value === "object" && typeof (value as { promptId?: unknown }).promptId === "string";
 }

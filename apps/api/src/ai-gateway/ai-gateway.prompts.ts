@@ -3,9 +3,10 @@ import type {
   ComplianceRewriteContext,
   GenerateArticleInput,
   OptimizeTitlesInput,
+  QualityScore,
   RewriteArticleInput,
 } from "@bytecamp-aigc/shared";
-import { AuditDecision, RiskCategory } from "@bytecamp-aigc/shared";
+import { AuditDecision, RiskCategory, qualityWeights } from "@bytecamp-aigc/shared";
 import type { AiChatMessage } from "./ai-provider.client";
 import { AiProviderBadOutputException } from "./ai-gateway.errors";
 
@@ -222,6 +223,47 @@ ${input.bodyText}
   ];
 }
 
+export function buildQualityScoringMessages(input: {
+  title: string;
+  text: string;
+  safetyScore?: number;
+}): AiChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `You are AI Creator Hub's Chinese content quality evaluator.
+
+Return only JSON:
+{
+  "contentValue": 0,
+  "expressionQuality": 0,
+  "readerExperience": 0,
+  "spreadPotential": 0,
+  "safetyScore": 0,
+  "reasons": ["reason 1", "reason 2"],
+  "suggestions": ["suggestion 1", "suggestion 2"]
+}
+
+Rules:
+- Each score must be an integer from 0 to 100.
+- contentValue weighs information density, insight depth, and usefulness.
+- expressionQuality weighs structure, language clarity, and logic.
+- readerExperience weighs readability, rhythm, and title attraction.
+- spreadPotential weighs topic relevance, discussion value, and sharing potential.
+- Use the provided safetyScore when present; otherwise judge compliance safety from the text.
+- Do not include overall; the server computes it with fixed product weights.`,
+    },
+    {
+      role: "user",
+      content: `Title: ${input.title}
+Safety score hint: ${input.safetyScore ?? ""}
+
+Article:
+${input.text}`,
+    },
+  ];
+}
+
 export function parseArticleGenerationJson(rawContent: string): ParsedArticleGeneration {
   const value = parseJsonObject(rawContent);
   const record = asRecord(value);
@@ -287,6 +329,27 @@ export function parseAuditJson(rawContent: string, meta: AuditParseMeta = {}): A
     rewriteSuggestions: readStringArray(record.rewriteSuggestions),
     summary,
     ...meta,
+  };
+}
+
+export function parseQualityScoreJson(rawContent: string, safetyScoreOverride?: number): QualityScore {
+  const value = parseJsonObject(rawContent);
+  const record = asRecord(value);
+  const score = {
+    contentValue: readScore(record.contentValue),
+    expressionQuality: readScore(record.expressionQuality),
+    readerExperience: readScore(record.readerExperience),
+    spreadPotential: readScore(record.spreadPotential),
+    safetyScore: safetyScoreOverride ?? readScore(record.safetyScore),
+  };
+  const reasons = readStringArray(record.reasons);
+  const suggestions = readStringArray(record.suggestions);
+
+  return {
+    ...score,
+    overall: calculateQualityOverall(score),
+    reasons: reasons.length ? reasons : ["Model returned a valid quality score."],
+    suggestions,
   };
 }
 
@@ -364,6 +427,26 @@ function readEvidence(value: unknown): AuditResult["evidence"] {
       return text && reason ? { text, reason } : undefined;
     })
     .filter((item): item is { text: string; reason: string } => Boolean(item));
+}
+
+function readScore(value: unknown) {
+  const score = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(score)) {
+    throw new AiProviderBadOutputException();
+  }
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function calculateQualityOverall(score: Omit<QualityScore, "overall" | "reasons" | "suggestions">) {
+  return Math.round(
+    score.contentValue * qualityWeights.contentValue +
+      score.expressionQuality * qualityWeights.expressionQuality +
+      score.readerExperience * qualityWeights.readerExperience +
+      score.spreadPotential * qualityWeights.spreadPotential +
+      score.safetyScore * qualityWeights.safetyScore,
+  );
 }
 
 function defaultAuditSummary(decision: AuditDecision) {

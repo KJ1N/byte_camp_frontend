@@ -40,7 +40,7 @@ export class PublishService {
 
   async scoreDraft(authorId: string, draftId: string): Promise<ScoringArticleResponse> {
     const { draft, text } = await this.loadDraftText(this.prisma, authorId, draftId);
-    const result = this.scoringService.scoreArticle({
+    const result = await this.scoringService.scoreArticle({
       title: draft.title,
       text,
     });
@@ -123,7 +123,7 @@ export class PublishService {
   async publishDraft(authorId: string, draftId: string): Promise<PublishArticleResponse> {
     const { draft, body, text } = await this.loadDraftText(this.prisma, authorId, draftId);
     const auditResult = await this.auditService.checkText(`${draft.title}\n${text}`);
-    const scoreResult = this.scoringService.scoreArticle({
+    const scoreResult = await this.scoringService.scoreArticle({
       title: draft.title,
       text,
       safetyScore: this.safetyScoreFor(auditResult.decision),

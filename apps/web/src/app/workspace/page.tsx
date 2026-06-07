@@ -23,6 +23,7 @@ import {
   plainTextFromRichText,
   replaceWithPlainText,
 } from "@/lib/rich-text-document";
+import { nextSelectedPromptIdAfterDelete } from "@/lib/prompt-management";
 import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
 
 const styleOptions = ["科普", "新闻", "轻松", "严谨", "种草"];
@@ -135,6 +136,16 @@ export default function WorkspacePage() {
       return [...items, summary];
     });
     setSelectedPromptId(prompt.id);
+  }
+
+  function handlePromptDeleted(promptId: string) {
+    setPrompts((items) => {
+      const remaining = items.filter((item) => item.id !== promptId);
+      setSelectedPromptId((currentPromptId) =>
+        nextSelectedPromptIdAfterDelete(promptId, currentPromptId, remaining),
+      );
+      return remaining;
+    });
   }
 
   async function loadDrafts(authToken: string) {
@@ -450,6 +461,7 @@ export default function WorkspacePage() {
                 promptsLoading={promptsLoading}
                 selectedPromptId={selectedPromptId}
                 onError={setError}
+                onPromptDeleted={handlePromptDeleted}
                 onPromptSaved={handlePromptSaved}
                 onSelectPrompt={setSelectedPromptId}
               />

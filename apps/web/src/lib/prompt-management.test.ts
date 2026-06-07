@@ -3,11 +3,13 @@ import { describe, it } from "node:test";
 import { PromptOwner, type PromptTemplateSummary } from "@bytecamp-aigc/shared";
 
 import {
+  canDeletePrompt,
   createDefaultPromptTemplate,
   getPromptEditButtonLabel,
   getPromptEditAction,
   groupPromptTemplates,
   isPromptDraftValid,
+  nextSelectedPromptIdAfterDelete,
   nextSelectedPromptIdAfterSave,
   shouldDisablePromptEdit,
 } from "./prompt-management.ts";
@@ -107,5 +109,20 @@ describe("prompt management helpers", () => {
   it("selects the saved prompt after create or update", () => {
     assert.equal(nextSelectedPromptIdAfterSave("created-1", "platform-1"), "created-1");
     assert.equal(nextSelectedPromptIdAfterSave(undefined, "private-1"), "private-1");
+  });
+
+  it("allows deleting only private prompts and falls back when the selected prompt is deleted", () => {
+    assert.equal(canDeletePrompt(platformPrompt, "token"), false);
+    assert.equal(canDeletePrompt(privatePrompt, "token"), true);
+    assert.equal(canDeletePrompt(privatePrompt, null), false);
+
+    assert.equal(
+      nextSelectedPromptIdAfterDelete("private-1", "private-1", [platformPrompt]),
+      "platform-1",
+    );
+    assert.equal(
+      nextSelectedPromptIdAfterDelete("private-1", "platform-1", [platformPrompt]),
+      "platform-1",
+    );
   });
 });

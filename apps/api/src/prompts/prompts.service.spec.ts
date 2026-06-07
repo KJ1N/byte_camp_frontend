@@ -103,6 +103,12 @@ function createService(prompts = [platformPrompt, privatePrompt]) {
         };
         return records[index];
       },
+      delete: async ({ where }: { where: { id: string } }) => {
+        const index = records.findIndex((prompt) => prompt.id === where.id);
+        if (index < 0) throw new Error("not found");
+        const [deleted] = records.splice(index, 1);
+        return deleted;
+      },
     },
   };
 
@@ -216,5 +222,21 @@ describe("PromptsService", () => {
     assert.equal(detail.owner, PromptOwner.Platform);
 
     await assert.rejects(() => service.getPromptDetail("private-1", "user-2"), NotFoundException);
+  });
+
+  it("deletes only the current user's private prompt", async () => {
+    const { service, records } = createService();
+
+    const response = await service.deletePrivatePrompt("private-1", "user-1");
+
+    assert.deepEqual(response, { promptId: "private-1" });
+    assert.deepEqual(records.map((prompt) => prompt.id), ["platform-1"]);
+  });
+
+  it("rejects deleting platform prompts and another user's private prompts", async () => {
+    const { service } = createService();
+
+    await assert.rejects(() => service.deletePrivatePrompt("platform-1", "user-1"), ForbiddenException);
+    await assert.rejects(() => service.deletePrivatePrompt("private-1", "user-2"), NotFoundException);
   });
 });

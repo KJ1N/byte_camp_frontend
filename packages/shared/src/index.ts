@@ -135,6 +135,10 @@ export interface PromptTemplateMutationResponse {
   prompt: PromptTemplateDetail;
 }
 
+export interface DeletePromptResponse {
+  promptId: string;
+}
+
 export interface OptimizeTitlesInput {
   topic: string;
   audience: string;
