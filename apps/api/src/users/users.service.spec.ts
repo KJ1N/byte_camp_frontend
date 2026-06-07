@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ArticleStatus, DraftMode, DraftStatus, EngagementEventType } from "@bytecamp-aigc/shared";
+import {
+  ArticleStatus,
+  CreatorContentStatus,
+  CreatorContentType,
+  DraftMode,
+  DraftStatus,
+  EngagementEventType,
+} from "@bytecamp-aigc/shared";
 import { UsersService } from "./users.service";
 
 const user = {
@@ -33,6 +40,7 @@ const drafts = [
 const articles = [
   {
     id: "article-owned",
+    draftId: "draft-owned",
     title: "AI 正在重塑内容创作",
     summary: "从选题、生成、编辑到审核发布，AI 创作工具正在变成完整工作流。",
     status: ArticleStatus.Published,
@@ -47,6 +55,7 @@ const articles = [
   },
   {
     id: "article-no-score",
+    draftId: "draft-no-score",
     title: "还没有评分的作品",
     summary: "用于验证平均质量分不会把无评分作品计入分母。",
     status: ArticleStatus.Published,
@@ -57,6 +66,17 @@ const articles = [
       { type: EngagementEventType.View, value: 20 },
       { type: EngagementEventType.Like, value: 2 },
     ],
+  },
+  {
+    id: "article-withdrawn",
+    draftId: "draft-withdrawn",
+    title: "已撤回作品",
+    summary: "用于验证撤回内容仍在作者的统一列表中可见。",
+    status: ArticleStatus.Withdrawn,
+    publishedAt: new Date("2026-06-04T12:00:00.000Z"),
+    updatedAt: new Date("2026-06-07T12:30:00.000Z"),
+    scores: [{ overall: 72 }],
+    events: [{ type: EngagementEventType.View, value: 5 }],
   },
 ];
 
@@ -102,13 +122,35 @@ describe("UsersService", () => {
       followers: 0,
       publishedArticles: 2,
       draftCount: 2,
-      totalViews: 100,
+      totalViews: 105,
       totalLikes: 12,
       totalFavorites: 5,
-      averageQualityScore: 86,
+      averageQualityScore: 79,
     });
     assert.deepEqual(result.recentDrafts.map((draft) => draft.id), ["draft-new", "draft-old"]);
-    assert.deepEqual(result.works.map((work) => work.id), ["article-owned", "article-no-score"]);
+    assert.deepEqual(result.works.map((work) => work.id), ["article-owned", "article-no-score", "article-withdrawn"]);
+    assert.deepEqual(result.contents.map((item) => item.id), [
+      "article-withdrawn",
+      "article-owned",
+      "draft-new",
+      "article-no-score",
+      "draft-old",
+    ]);
+    assert.deepEqual(result.contents[0], {
+      id: "article-withdrawn",
+      type: CreatorContentType.Article,
+      status: CreatorContentStatus.Withdrawn,
+      title: "已撤回作品",
+      summary: "用于验证撤回内容仍在作者的统一列表中可见。",
+      draftId: "draft-withdrawn",
+      articleId: "article-withdrawn",
+      updatedAt: "2026-06-07T12:30:00.000Z",
+      publishedAt: "2026-06-04T12:00:00.000Z",
+      qualityScore: 72,
+      engagement: { views: 5, likes: 0, favorites: 0 },
+    });
+    assert.equal(result.contents[2].type, CreatorContentType.Draft);
+    assert.equal(result.contents[2].status, CreatorContentStatus.Draft);
     assert.equal(result.works[0].qualityScore, 86);
     assert.deepEqual(result.works[0].engagement, {
       views: 80,
@@ -135,5 +177,6 @@ describe("UsersService", () => {
     });
     assert.deepEqual(result.recentDrafts, []);
     assert.deepEqual(result.works, []);
+    assert.deepEqual(result.contents, []);
   });
 });

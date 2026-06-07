@@ -397,6 +397,32 @@ export interface CreatorWorkItem {
   engagement: ArticleEngagementStats;
 }
 
+export enum CreatorContentType {
+  Draft = "DRAFT",
+  Article = "ARTICLE",
+}
+
+export enum CreatorContentStatus {
+  Draft = "DRAFT",
+  Published = "PUBLISHED",
+  Withdrawn = "WITHDRAWN",
+  NeedsRevision = "NEEDS_REVISION",
+}
+
+export interface CreatorContentItem {
+  id: string;
+  type: CreatorContentType;
+  status: CreatorContentStatus;
+  title: string;
+  summary: string;
+  draftId?: string;
+  articleId?: string;
+  updatedAt: string;
+  publishedAt?: string;
+  qualityScore?: number;
+  engagement?: ArticleEngagementStats;
+}
+
 export interface CreatorOverviewResponse {
   user: {
     id: string;
@@ -406,6 +432,14 @@ export interface CreatorOverviewResponse {
   stats: CreatorOverviewStats;
   recentDrafts: DraftSummary[];
   works: CreatorWorkItem[];
+  contents: CreatorContentItem[];
+}
+
+export interface WithdrawArticleResponse {
+  articleId: string;
+  draftId: string;
+  status: ArticleStatus.Withdrawn;
+  message: string;
 }
 
 export interface CreateEngagementEventInput {

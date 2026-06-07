@@ -17,5 +17,10 @@ export class PublishController {
   getArticle(@Param("id") id: string) {
     return this.publishService.getPublishedArticle(id);
   }
-}
 
+  @Post("articles/:id/withdraw")
+  @UseGuards(JwtAuthGuard)
+  withdrawArticle(@CurrentUser("userId") userId: string, @Param("id") id: string) {
+    return this.publishService.withdrawArticle(userId, id);
+  }
+}

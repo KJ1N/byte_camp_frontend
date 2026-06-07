@@ -199,7 +199,7 @@ export default function ContentHomePage() {
           <div className="bg-white px-5 py-5">
             <h2 className="text-lg font-semibold">创作者入口</h2>
             <p className="mt-3 text-sm leading-7 text-[#6b7280]">
-              登录后 hover 右上角昵称，可进入工作台或草稿箱。创作、审核和发布能力不会放在首页直接暴露。
+              登录后点击右上角昵称，可进入工作台或草稿箱。创作、审核和发布能力不会放在首页直接暴露。
             </p>
             <Link className="mt-5 inline-flex rounded-md bg-[#ff4d4f] px-4 py-2 text-sm font-semibold text-white" href="/workspace">
               进入工作台

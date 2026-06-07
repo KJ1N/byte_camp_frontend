@@ -1,8 +1,11 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import {
   ArticleStatus,
+  CreatorContentStatus,
+  CreatorContentType,
   EngagementEventType,
   type ArticleEngagementStats,
+  type CreatorContentItem,
   type CreatorOverviewResponse,
   type CreatorWorkItem,
   type DraftSummary,
@@ -21,6 +24,7 @@ interface DraftRecord {
 
 interface ArticleRecord {
   id: string;
+  draftId: string;
   title: string;
   summary: string;
   status: string;
@@ -92,6 +96,10 @@ export class UsersService {
       },
       recentDrafts: recentDrafts.map((draft) => this.mapDraftSummary(draft)),
       works,
+      contents: this.sortContentsByUpdatedTime([
+        ...recentDrafts.map((draft) => this.mapDraftContent(draft)),
+        ...articles.map((article) => this.mapArticleContent(article)),
+      ]),
     };
   }
 
@@ -118,6 +126,43 @@ export class UsersService {
       qualityScore: article.scores[0]?.overall ?? 0,
       engagement: this.statsFromEvents(article.events),
     };
+  }
+
+  private mapDraftContent(draft: DraftRecord): CreatorContentItem {
+    return {
+      id: draft.id,
+      type: CreatorContentType.Draft,
+      status: CreatorContentStatus.Draft,
+      title: draft.title,
+      summary: `v${draft.version}，最近更新草稿`,
+      draftId: draft.id,
+      updatedAt: draft.updatedAt.toISOString(),
+    };
+  }
+
+  private mapArticleContent(article: ArticleRecord): CreatorContentItem {
+    const engagement = this.statsFromEvents(article.events);
+
+    return {
+      id: article.id,
+      type: CreatorContentType.Article,
+      status:
+        article.status === ArticleStatus.Withdrawn
+          ? CreatorContentStatus.Withdrawn
+          : CreatorContentStatus.Published,
+      title: article.title,
+      summary: article.summary,
+      draftId: article.draftId,
+      articleId: article.id,
+      updatedAt: article.updatedAt.toISOString(),
+      publishedAt: article.publishedAt.toISOString(),
+      qualityScore: article.scores[0]?.overall ?? 0,
+      engagement,
+    };
+  }
+
+  private sortContentsByUpdatedTime(contents: CreatorContentItem[]) {
+    return contents.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
   }
 
   private statsFromEvents(events: Array<{ type: string; value: number }>): ArticleEngagementStats {

@@ -108,7 +108,13 @@ function createService(
     qualityScores: [] as Array<{ overall: number }>,
     qualityScoreArticleLinks: [] as Array<{ id: string; articleId: string }>,
     articles: [] as Array<{ title: string; summary: string }>,
-    articleUpdates: [] as Array<{ id: string; title: string; body: RichTextDocument; summary: string }>,
+    articleUpdates: [] as Array<{
+      id: string;
+      title: string;
+      body: RichTextDocument;
+      summary: string;
+      status?: ArticleStatus;
+    }>,
     revisions: [] as Array<{ title: string; body: RichTextDocument; reason?: string }>,
     draftUpdates: [] as Array<{ status: DraftStatus }>,
   };
@@ -174,13 +180,14 @@ function createService(
         data,
       }: {
         where: { id: string };
-        data: { title: string; body: unknown; summary: string };
+        data: { title: string; body: unknown; summary: string; status?: ArticleStatus };
       }) => {
         calls.articleUpdates.push({
           id: where.id,
           title: data.title,
           body: data.body as RichTextDocument,
           summary: data.summary,
+          status: data.status,
         });
         return {
           id: where.id,
@@ -231,6 +238,39 @@ function createService(
 
   return {
     service: new PublishService(prisma as never, auditService, scoringService as never),
+    calls,
+  };
+}
+
+function createWithdrawService(
+  article:
+    | {
+        id: string;
+        authorId: string;
+        draftId: string;
+        status: ArticleStatus;
+      }
+    | null,
+) {
+  const calls = {
+    articleUpdates: [] as Array<{ id: string; status: ArticleStatus }>,
+  };
+  const prisma = {
+    article: {
+      findFirst: async ({ where }: { where: { id: string; authorId: string } }) => {
+        if (!article) return null;
+        if (where.id !== article.id || where.authorId !== article.authorId) return null;
+        return article;
+      },
+      update: async ({ where, data }: { where: { id: string }; data: { status: ArticleStatus } }) => {
+        calls.articleUpdates.push({ id: where.id, status: data.status });
+        return { ...article, id: where.id, status: data.status };
+      },
+    },
+  };
+
+  return {
+    service: new PublishService(prisma as never, createAuditService(), new ScoringService()),
     calls,
   };
 }
@@ -437,6 +477,7 @@ describe("PublishService", () => {
         title: "Updated published article",
         body: updatedBody,
         summary: "Updated body after the creator edits the published draft.",
+        status: ArticleStatus.Published,
       },
     ]);
     assert.deepEqual(calls.revisions, [
@@ -502,5 +543,46 @@ describe("PublishService", () => {
     assert.equal(article.latestAudit?.result.summary, "旧记录按草稿回退读取。");
     assert.equal(article.latestScore?.scoreId, "score-legacy");
     assert.equal(article.latestScore?.overall, 84);
+  });
+
+  it("withdraws an owned published article", async () => {
+    const { service, calls } = createWithdrawService({
+      id: "article-1",
+      authorId: "user-1",
+      draftId: "draft-1",
+      status: ArticleStatus.Published,
+    });
+
+    const result = await service.withdrawArticle("user-1", "article-1");
+
+    assert.deepEqual(result, {
+      articleId: "article-1",
+      draftId: "draft-1",
+      status: ArticleStatus.Withdrawn,
+      message: "文章已撤回，读者将无法继续访问。",
+    });
+    assert.deepEqual(calls.articleUpdates, [{ id: "article-1", status: ArticleStatus.Withdrawn }]);
+  });
+
+  it("rejects withdrawing another creator's article", async () => {
+    const { service } = createWithdrawService({
+      id: "article-1",
+      authorId: "user-2",
+      draftId: "draft-1",
+      status: ArticleStatus.Published,
+    });
+
+    await assert.rejects(() => service.withdrawArticle("user-1", "article-1"), /Article not found/);
+  });
+
+  it("rejects withdrawing an already withdrawn article", async () => {
+    const { service } = createWithdrawService({
+      id: "article-1",
+      authorId: "user-1",
+      draftId: "draft-1",
+      status: ArticleStatus.Withdrawn,
+    });
+
+    await assert.rejects(() => service.withdrawArticle("user-1", "article-1"), /Article already withdrawn/);
   });
 });

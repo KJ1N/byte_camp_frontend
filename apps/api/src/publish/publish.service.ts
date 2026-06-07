@@ -14,6 +14,7 @@ import {
   type QualityScore,
   type RichTextDocument,
   type ScoringArticleResponse,
+  type WithdrawArticleResponse,
 } from "@bytecamp-aigc/shared";
 import { AuditService } from "../audit/audit.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -163,6 +164,7 @@ export class PublishService {
         await tx.article.update({
           where: { id: existingArticle.id },
           data: {
+            status: ArticleStatus.Published,
             title: draft.title,
             body: body as unknown as Prisma.InputJsonValue,
             summary,
@@ -236,6 +238,30 @@ export class PublishService {
         message: "文章发布成功。",
       };
     });
+  }
+
+  async withdrawArticle(authorId: string, articleId: string): Promise<WithdrawArticleResponse> {
+    const article = await this.prisma.article.findFirst({
+      where: { id: articleId, authorId },
+      select: { id: true, draftId: true, status: true },
+    });
+
+    if (!article) throw new NotFoundException("Article not found");
+    if (article.status === ArticleStatus.Withdrawn) {
+      throw new ConflictException("Article already withdrawn");
+    }
+
+    await this.prisma.article.update({
+      where: { id: article.id },
+      data: { status: ArticleStatus.Withdrawn },
+    });
+
+    return {
+      articleId: article.id,
+      draftId: article.draftId,
+      status: ArticleStatus.Withdrawn,
+      message: "文章已撤回，读者将无法继续访问。",
+    };
   }
 
   private async loadDraftText(db: Pick<Prisma.TransactionClient, "draft">, authorId: string, draftId: string) {

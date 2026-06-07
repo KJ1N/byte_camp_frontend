@@ -4,24 +4,28 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type {
+  CreatorContentItem,
   CreatorInspiration,
   CreatorInspirationsResponse,
   CreatorOverviewResponse,
-  CreatorWorkItem,
+  WithdrawArticleResponse,
 } from "@bytecamp-aigc/shared";
 
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
 import {
+  filterCreatorContents,
   formatCreatorMetric,
-  getCreatorWorkStatusLabel,
+  getCreatorContentActions,
+  getCreatorContentStatusLabel,
   getEmptyCreatorStats,
-  sortCreatorWorksByPublishedTime,
+  sortCreatorContentsByUpdatedTime,
+  type CreatorContentFilter,
 } from "@/lib/creator-overview";
 import { buildWorkspaceTopicHref } from "@/lib/workspace-topic";
 
 type LoadState = "loading" | "idle";
-type ActiveSection = "overview" | "works";
+type ActiveSection = "overview" | "contents";
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -42,7 +46,8 @@ function isCreatorOverviewResponse(payload: unknown): payload is CreatorOverview
       typeof payload === "object" &&
       "stats" in payload &&
       "recentDrafts" in payload &&
-      "works" in payload,
+      "works" in payload &&
+      "contents" in payload,
   );
 }
 
@@ -54,8 +59,12 @@ export default function CreatorHomePage() {
   const [inspirations, setInspirations] = useState<CreatorInspiration[]>([]);
   const [status, setStatus] = useState<LoadState>("loading");
   const [activeSection, setActiveSection] = useState<ActiveSection>("overview");
+  const [contentFilter, setContentFilter] = useState<CreatorContentFilter>("all");
   const [overviewError, setOverviewError] = useState("");
   const [inspirationError, setInspirationError] = useState("");
+  const [withdrawError, setWithdrawError] = useState("");
+  const [pendingWithdrawArticleId, setPendingWithdrawArticleId] = useState("");
+  const [withdrawingArticleId, setWithdrawingArticleId] = useState("");
   const [managementOpen, setManagementOpen] = useState(true);
 
   useEffect(() => {
@@ -74,7 +83,8 @@ export default function CreatorHomePage() {
 
   const stats = overview?.stats ?? getEmptyCreatorStats();
   const recentDrafts = overview?.recentDrafts ?? [];
-  const works = useMemo(() => sortCreatorWorksByPublishedTime(overview?.works ?? []), [overview?.works]);
+  const contents = useMemo(() => sortCreatorContentsByUpdatedTime(overview?.contents ?? []), [overview?.contents]);
+  const filteredContents = useMemo(() => filterCreatorContents(contents, contentFilter), [contents, contentFilter]);
 
   async function loadCreatorData(authToken: string) {
     setStatus("loading");
@@ -129,6 +139,40 @@ export default function CreatorHomePage() {
     setInspirations([]);
     setOverviewError("");
     setInspirationError("");
+    setWithdrawError("");
+    setPendingWithdrawArticleId("");
+    setWithdrawingArticleId("");
+  }
+
+  async function withdrawArticle(articleId: string) {
+    if (!token) return;
+
+    setWithdrawError("");
+    setWithdrawingArticleId(articleId);
+
+    const response = await apiFetch(`/articles/${articleId}/withdraw`, {
+      authToken: token,
+      method: "POST",
+    });
+    const payload = await readApiJson<WithdrawArticleResponse | { message?: string | string[] }>(response);
+
+    setWithdrawingArticleId("");
+
+    if (response.status === 401) {
+      clearAuthSession();
+      setToken(null);
+      setUser(null);
+      setOverview(null);
+      return;
+    }
+
+    if (!response.ok) {
+      setWithdrawError(getApiErrorMessage(payload, "撤回失败，请稍后重试。"));
+      return;
+    }
+
+    setPendingWithdrawArticleId("");
+    await loadCreatorData(token);
   }
 
   return (
@@ -216,12 +260,12 @@ export default function CreatorHomePage() {
                   <button
                     className={[
                       "rounded-md px-3 py-2 text-left",
-                      activeSection === "works" ? "bg-[#fff1f1] font-semibold text-[#ff4d4f]" : "text-[#4e5661] hover:bg-[#f6f7f9]",
+                      activeSection === "contents" ? "bg-[#fff1f1] font-semibold text-[#ff4d4f]" : "text-[#4e5661] hover:bg-[#f6f7f9]",
                     ].join(" ")}
                     type="button"
-                    onClick={() => setActiveSection("works")}
+                    onClick={() => setActiveSection("contents")}
                   >
-                    作品管理
+                    我的内容
                   </button>
                   <Link className="rounded-md px-3 py-2 text-[#4e5661] hover:bg-[#f6f7f9]" href="/drafts">
                     草稿箱列表
@@ -303,7 +347,18 @@ export default function CreatorHomePage() {
               </div>
             ) : null}
 
-            <WorksPanel works={works} visible={activeSection === "works" || activeSection === "overview"} />
+            <ContentPanel
+              contents={filteredContents}
+              filter={contentFilter}
+              pendingWithdrawArticleId={pendingWithdrawArticleId}
+              visible={activeSection === "contents" || activeSection === "overview"}
+              withdrawError={withdrawError}
+              withdrawingArticleId={withdrawingArticleId}
+              onCancelWithdraw={() => setPendingWithdrawArticleId("")}
+              onFilterChange={setContentFilter}
+              onRequestWithdraw={setPendingWithdrawArticleId}
+              onWithdraw={(articleId) => void withdrawArticle(articleId)}
+            />
           </section>
 
           <aside className="h-fit rounded-lg bg-white px-5 py-6 lg:sticky lg:top-20">
@@ -361,56 +416,184 @@ function MetricCard({ label, value, hint }: { label: string; value: string; hint
   );
 }
 
-function WorksPanel({ works, visible }: { works: CreatorWorkItem[]; visible: boolean }) {
+const contentFilters: Array<{ id: CreatorContentFilter; label: string }> = [
+  { id: "all", label: "全部" },
+  { id: "draft", label: "草稿" },
+  { id: "published", label: "已发布" },
+  { id: "withdrawn", label: "已撤回" },
+];
+
+function ContentPanel({
+  contents,
+  filter,
+  pendingWithdrawArticleId,
+  visible,
+  withdrawError,
+  withdrawingArticleId,
+  onCancelWithdraw,
+  onFilterChange,
+  onRequestWithdraw,
+  onWithdraw,
+}: {
+  contents: CreatorContentItem[];
+  filter: CreatorContentFilter;
+  pendingWithdrawArticleId: string;
+  visible: boolean;
+  withdrawError: string;
+  withdrawingArticleId: string;
+  onCancelWithdraw: () => void;
+  onFilterChange: (filter: CreatorContentFilter) => void;
+  onRequestWithdraw: (articleId: string) => void;
+  onWithdraw: (articleId: string) => void;
+}) {
   if (!visible) return null;
 
   return (
     <div className="rounded-lg bg-white px-6 py-7" id="works">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold">作品管理</h2>
-          <p className="mt-1 text-sm text-[#8f959e]">已发布内容会展示质量分和读者互动，用于后续复盘优化。</p>
+          <h2 className="text-xl font-semibold">我的内容</h2>
+          <p className="mt-1 text-sm text-[#8f959e]">统一管理草稿、已发布和已撤回内容，二次编辑仍需重新审核。</p>
         </div>
         <Link className="rounded-md border border-[#ffb6b7] px-4 py-2 text-sm font-semibold text-[#ff4d4f] hover:bg-[#fff1f1]" href="/workspace">
           去工作台创作
         </Link>
       </div>
 
-      {!works.length ? (
+      <div className="mb-5 flex flex-wrap gap-2">
+        {contentFilters.map((item) => (
+          <button
+            className={[
+              "rounded-md border px-3 py-2 text-sm font-semibold",
+              filter === item.id
+                ? "border-[#ff4d4f] bg-[#fff1f1] text-[#ff4d4f]"
+                : "border-[#eeeeee] bg-white text-[#4e5661] hover:bg-[#f6f7f9]",
+            ].join(" ")}
+            key={item.id}
+            type="button"
+            onClick={() => onFilterChange(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {withdrawError ? (
+        <div className="mb-4 rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-4 py-3 text-sm text-[#d92d2d]" role="alert">
+          {withdrawError}
+        </div>
+      ) : null}
+
+      {!contents.length ? (
         <div className="rounded-md border border-dashed border-[#dedede] px-5 py-12 text-center">
-          <div className="text-base font-semibold">还没有发布作品</div>
-          <p className="mt-2 text-sm text-[#8f959e]">完成草稿编辑并通过审核评分后，作品会出现在这里。</p>
+          <div className="text-base font-semibold">当前筛选下没有内容</div>
+          <p className="mt-2 text-sm text-[#8f959e]">可以从工作台创建草稿，发布通过后会进入统一管理列表。</p>
           <Link className="mt-5 inline-flex rounded-md bg-[#ff4d4f] px-4 py-2 text-sm font-semibold text-white" href="/workspace">
             开始创作
           </Link>
         </div>
       ) : (
         <div className="grid gap-4">
-          {works.map((work) => (
-            <article className="rounded-md border border-[#eeeeee] bg-[#fbfbfb] px-4 py-4" key={work.id}>
+          {contents.map((content) => (
+            <article className="rounded-md border border-[#eeeeee] bg-[#fbfbfb] px-4 py-4" key={content.id}>
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <h3 className="line-clamp-1 text-base font-semibold">{work.title}</h3>
+                    <h3 className="line-clamp-1 text-base font-semibold">{content.title}</h3>
                     <span className="rounded-md bg-[#fff1f1] px-2 py-1 text-xs font-medium text-[#ff4d4f]">
-                      {getCreatorWorkStatusLabel(work.status)}
+                      {getCreatorContentStatusLabel(content.status)}
                     </span>
                   </div>
-                  <p className="line-clamp-2 text-sm leading-6 text-[#6b7280]">{work.summary}</p>
+                  <p className="line-clamp-2 text-sm leading-6 text-[#6b7280]">{content.summary}</p>
                   <div className="mt-3 flex flex-wrap gap-4 text-xs text-[#8f959e]">
-                    <span>{formatTime(work.publishedAt)} 发布</span>
-                    <span>质量分 {work.qualityScore}</span>
-                    <span>阅读 {formatCreatorMetric(work.engagement.views)}</span>
-                    <span>点赞 {formatCreatorMetric(work.engagement.likes)}</span>
-                    <span>收藏 {formatCreatorMetric(work.engagement.favorites)}</span>
+                    {content.publishedAt ? <span>{formatTime(content.publishedAt)} 发布</span> : null}
+                    <span>{formatTime(content.updatedAt)} 更新</span>
+                    {content.qualityScore !== undefined ? <span>质量分 {content.qualityScore}</span> : null}
+                    {content.engagement ? (
+                      <>
+                        <span>阅读 {formatCreatorMetric(content.engagement.views)}</span>
+                        <span>点赞 {formatCreatorMetric(content.engagement.likes)}</span>
+                        <span>收藏 {formatCreatorMetric(content.engagement.favorites)}</span>
+                      </>
+                    ) : null}
                   </div>
+                  {pendingWithdrawArticleId && pendingWithdrawArticleId === content.articleId ? (
+                    <div className="mt-4 rounded-md border border-[#ffd4d4] bg-white px-3 py-3 text-sm text-[#4e5661]">
+                      <div>撤回后读者将无法继续访问这篇文章，确认撤回？</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          className="rounded-md bg-[#ff4d4f] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={withdrawingArticleId === content.articleId}
+                          type="button"
+                          onClick={() => content.articleId && onWithdraw(content.articleId)}
+                        >
+                          {withdrawingArticleId === content.articleId ? "撤回中..." : "确认撤回"}
+                        </button>
+                        <button
+                          className="rounded-md border border-[#dedede] px-3 py-2 text-sm font-semibold text-[#4e5661] hover:bg-[#f6f7f9]"
+                          type="button"
+                          onClick={onCancelWithdraw}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-                <Link
-                  className="shrink-0 rounded-md bg-[#ff4d4f] px-3 py-2 text-sm font-semibold text-white hover:bg-[#f04446]"
-                  href={`/articles/${work.id}`}
-                >
-                  查看详情
-                </Link>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  {getCreatorContentActions(content).map((action) => {
+                    if (action.kind === "view" && content.articleId) {
+                      return (
+                        <Link
+                          className="rounded-md bg-[#ff4d4f] px-3 py-2 text-sm font-semibold text-white hover:bg-[#f04446]"
+                          href={`/articles/${content.articleId}`}
+                          key={action.kind}
+                        >
+                          {action.label}
+                        </Link>
+                      );
+                    }
+
+                    if (action.kind === "edit" && content.draftId) {
+                      return (
+                        <Link
+                          className="rounded-md border border-[#dedede] px-3 py-2 text-sm font-semibold text-[#4e5661] hover:bg-white"
+                          href={`/drafts/${content.draftId}`}
+                          key={action.kind}
+                        >
+                          {action.label}
+                        </Link>
+                      );
+                    }
+
+                    if (action.kind === "publish" && content.draftId) {
+                      return (
+                        <Link
+                          className="rounded-md border border-[#ffb6b7] px-3 py-2 text-sm font-semibold text-[#ff4d4f] hover:bg-[#fff1f1]"
+                          href={`/publish/${content.draftId}`}
+                          key={action.kind}
+                        >
+                          {action.label}
+                        </Link>
+                      );
+                    }
+
+                    if (action.kind === "withdraw" && content.articleId) {
+                      return (
+                        <button
+                          className="rounded-md border border-[#ffd4d4] px-3 py-2 text-sm font-semibold text-[#d92d2d] hover:bg-[#fff6f6]"
+                          key={action.kind}
+                          type="button"
+                          onClick={() => content.articleId && onRequestWithdraw(content.articleId)}
+                        >
+                          {action.label}
+                        </button>
+                      );
+                    }
+
+                    return null;
+                  })}
+                </div>
               </div>
             </article>
           ))}
