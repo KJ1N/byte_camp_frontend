@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
@@ -8,6 +8,7 @@ import Underline from "@tiptap/extension-underline";
 import StarterKit from "@tiptap/starter-kit";
 import type { RichTextDocument } from "@bytecamp-aigc/shared";
 
+import { normalizeRichTextDocument } from "@/lib/rich-text-document";
 import { richTextEditorContentClass } from "./rich-text-editor-style";
 
 interface RichTextEditorProps {
@@ -53,6 +54,7 @@ const toolbarGroups: Array<Array<{ label: string; action: ToolbarAction; title: 
 ];
 
 export function RichTextEditor({ value, onChange }: RichTextEditorProps) {
+  const normalizedValue = useMemo(() => normalizeRichTextDocument(value), [value]);
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -69,7 +71,7 @@ export function RichTextEditor({ value, onChange }: RichTextEditorProps) {
         allowBase64: false,
       }),
     ],
-    content: value as unknown as JSONContent,
+    content: normalizedValue as unknown as JSONContent,
     immediatelyRender: false,
     editorProps: {
       attributes: {
@@ -77,18 +79,18 @@ export function RichTextEditor({ value, onChange }: RichTextEditorProps) {
       },
     },
     onUpdate({ editor: currentEditor }) {
-      onChange(currentEditor.getJSON() as RichTextDocument);
+      onChange(normalizeRichTextDocument(currentEditor.getJSON() as RichTextDocument));
     },
   });
 
   useEffect(() => {
     if (!editor) return;
     const current = JSON.stringify(editor.getJSON());
-    const next = JSON.stringify(value);
+    const next = JSON.stringify(normalizedValue);
     if (current !== next) {
-      editor.commands.setContent(value as unknown as JSONContent, { emitUpdate: false });
+      editor.commands.setContent(normalizedValue as unknown as JSONContent, { emitUpdate: false });
     }
-  }, [editor, value]);
+  }, [editor, normalizedValue]);
 
   function run(action: ToolbarAction) {
     if (!editor) return;

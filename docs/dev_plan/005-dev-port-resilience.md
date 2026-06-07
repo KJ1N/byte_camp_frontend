@@ -221,3 +221,27 @@ corepack pnpm dev
 - 如果 API 长时间未 ready，脚本输出明确的 readiness timeout，而不是让前端页面先报网络错误。
 
 该修正不改变业务 API、数据库、鉴权、审核、评分、发布或榜单逻辑，只改善本地开发进程编排。
+
+## 补充：API 子进程提前退出与端口占用提示
+
+本地开发中还存在一个边界情况：端口检测通过后，API 子进程真正监听端口前，端口可能又被旧 watcher 或其它进程占用，导致 NestJS 抛出 `EADDRINUSE` 并提前退出。
+
+修正方案：
+
+- `scripts/dev.mjs` 在等待 `/health` 期间监听 shared/API 子进程退出事件。
+- 如果 API ready 前任一子进程退出，脚本立刻失败并停止其它子进程，不继续等待 health 超时。
+- `apps/api/src/main.ts` 保持通过 `PORT` 决定监听端口，但启动失败时使用专门的错误提示，将 `EADDRINUSE` 和 `EACCES` 转换为可操作说明。
+
+涉及文件：
+
+- `scripts/dev.mjs`
+- `scripts/dev.test.mjs`
+- `apps/api/src/bootstrap-error.ts`
+- `apps/api/src/bootstrap-error.spec.ts`
+- `apps/api/src/main.ts`
+
+验证方式：
+
+- `corepack pnpm test:dev-script`
+- `corepack pnpm --filter @bytecamp-aigc/api test`
+- 在 3200/3201 被占用时运行 `corepack pnpm dev -- --dry-run`，确认脚本自动选择后续端口。

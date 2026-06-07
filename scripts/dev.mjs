@@ -223,8 +223,18 @@ export async function startDevProcesses(config, baseEnv = process.env, options =
     options.waitForApiReady ??
     ((url) => waitForHttpOk({ url }));
   const registerProcessSignals = options.registerProcessSignals ?? true;
+  const setExitCode =
+    options.setExitCode ??
+    ((exitCode) => {
+      process.exitCode = exitCode;
+    });
   const children = [];
   let stopping = false;
+  let waitingForApiStartup = true;
+  let rejectStartupFailure;
+  const startupFailure = new Promise((_, reject) => {
+    rejectStartupFailure = reject;
+  });
 
   const shutdown = (exitCode = 0) => {
     if (stopping) {
@@ -232,10 +242,10 @@ export async function startDevProcesses(config, baseEnv = process.env, options =
     }
     stopping = true;
     stopChildren(children);
-    process.exitCode = exitCode;
+    setExitCode(exitCode);
   };
 
-  const trackChild = (child) => {
+  const trackChild = (label, child) => {
     children.push(child);
     child.once("exit", (code, signal) => {
       if (stopping) {
@@ -243,18 +253,27 @@ export async function startDevProcesses(config, baseEnv = process.env, options =
       }
 
       const exitCode = code ?? (signal ? 1 : 0);
+      if (waitingForApiStartup) {
+        const reason =
+          signal !== null && signal !== undefined
+            ? `${label} exited with signal ${signal}`
+            : `${label} exited with code ${exitCode}`;
+        rejectStartupFailure(
+          new Error(`${reason} before the API became ready.`),
+        );
+      }
       shutdown(exitCode);
     });
 
     return child;
   };
 
-  trackChild(spawnProcess(
+  trackChild("packages/shared", spawnProcess(
     "packages/shared",
     ["--filter", "@bytecamp-aigc/shared", "dev"],
     baseEnv,
   ));
-  trackChild(spawnProcess(
+  trackChild("apps/api", spawnProcess(
     "apps/api",
     ["--filter", "@bytecamp-aigc/api", "dev"],
     {
@@ -265,9 +284,13 @@ export async function startDevProcesses(config, baseEnv = process.env, options =
 
   const healthUrl = apiHealthUrl(config.apiBaseUrl);
   console.log(`Waiting for API readiness: ${healthUrl}`);
-  await waitForApiReady(healthUrl);
+  try {
+    await Promise.race([waitForApiReady(healthUrl), startupFailure]);
+  } finally {
+    waitingForApiStartup = false;
+  }
 
-  trackChild(spawnProcess(
+  trackChild("apps/web", spawnProcess(
     "apps/web",
     ["--filter", "@bytecamp-aigc/web", "dev"],
     {

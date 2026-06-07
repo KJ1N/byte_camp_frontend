@@ -1,12 +1,8 @@
 import { BadRequestException, Body, Controller, Get, Post, Res, UseGuards } from "@nestjs/common";
-import type {
-  AiStreamEvent,
-  GenerateArticleInput,
-  OptimizeTitlesInput,
-  RewriteArticleInput,
-} from "@bytecamp-aigc/shared";
+import type { GenerateArticleInput, OptimizeTitlesInput, RewriteArticleInput } from "@bytecamp-aigc/shared";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/auth.guard";
+import { writeSse, type SseResponse } from "../common/sse";
 import { AiGatewayService } from "./ai-gateway.service";
 
 @Controller("ai")
@@ -24,7 +20,7 @@ export class AiGatewayController {
   streamGenerateArticle(
     @CurrentUser("userId") userId: string,
     @Body() body: GenerateArticleInput,
-    @Res() response: { setHeader: (key: string, value: string) => void; write: (chunk: string) => void; end: () => void },
+    @Res() response: SseResponse,
   ) {
     const input = this.normalizeGenerateArticleInput(body);
     return writeSse(response, this.aiGatewayService.streamArticleDraft(input, userId));
@@ -33,7 +29,7 @@ export class AiGatewayController {
   @Post("optimize-titles/stream")
   streamOptimizeTitles(
     @Body() body: OptimizeTitlesInput,
-    @Res() response: { setHeader: (key: string, value: string) => void; write: (chunk: string) => void; end: () => void },
+    @Res() response: SseResponse,
   ) {
     return writeSse(response, this.aiGatewayService.streamTitleOptimization(this.normalizeOptimizeTitlesInput(body)));
   }
@@ -41,7 +37,7 @@ export class AiGatewayController {
   @Post("rewrite/stream")
   streamRewrite(
     @Body() body: RewriteArticleInput,
-    @Res() response: { setHeader: (key: string, value: string) => void; write: (chunk: string) => void; end: () => void },
+    @Res() response: SseResponse,
   ) {
     return writeSse(response, this.aiGatewayService.streamRewrite(body));
   }
@@ -81,28 +77,4 @@ export class AiGatewayController {
       bodyText: body.bodyText?.trim() || undefined,
     };
   }
-}
-
-async function writeSse(
-  response: { setHeader: (key: string, value: string) => void; write: (chunk: string) => void; end: () => void },
-  events: AsyncIterable<AiStreamEvent>,
-) {
-  response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  response.setHeader("Cache-Control", "no-cache");
-  response.setHeader("Connection", "keep-alive");
-
-  try {
-    for await (const event of events) {
-      response.write(encodeSseEvent(event));
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "AI stream failed";
-    response.write(encodeSseEvent({ event: "error", data: { message } }));
-  } finally {
-    response.end();
-  }
-}
-
-function encodeSseEvent(event: AiStreamEvent) {
-  return `event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`;
 }

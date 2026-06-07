@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { AuditDecision, RiskCategory } from "@bytecamp-aigc/shared";
 import { AiGatewayService } from "./ai-gateway.service";
 
 type ConfigValues = Record<string, string | undefined>;
@@ -268,6 +269,41 @@ describe("AiGatewayService", () => {
     );
     assert.match(String(events[1].data.text), /Original paragraph/);
     assert.ok("suggestions" in events.at(-1)!.data);
+  });
+
+  it("streams mock compliance rewrite text with a rich-text body in done", async () => {
+    const service = new ServiceCtor(
+      createConfig({
+        AI_PROVIDER_MODE: "mock",
+        AI_MODEL: "mock-model",
+      }),
+      createPromptsService(),
+      createProvider("{}"),
+    );
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    for await (const event of service.streamComplianceRewrite({
+      title: "发布前安全检查",
+      bodyText: "文章包含身份证号和手机号，需要发布前处理。",
+      audit: {
+        decision: AuditDecision.Warn,
+        riskLevel: "medium",
+        categories: [RiskCategory.SensitiveInfo],
+        evidence: [{ text: "身份证号和手机号", reason: "包含敏感个人信息" }],
+        rewriteSuggestions: ["删除或脱敏个人信息"],
+        summary: "内容需要修改后重新审核。",
+      },
+    })) {
+      events.push(event);
+    }
+
+    assert.deepEqual(
+      events.map((event) => event.event),
+      ["meta", "text-delta", "suggestion", "done"],
+    );
+    assert.match(String(events[1].data.text), /合规改写后/);
+    assert.ok("bodyText" in events.at(-1)!.data);
+    assert.deepEqual((events.at(-1)!.data.body as { type: string }).type, "doc");
   });
 
   it("streams live article body deltas before the provider stream finishes", async () => {

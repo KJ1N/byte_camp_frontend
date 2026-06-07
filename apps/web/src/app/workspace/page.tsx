@@ -37,10 +37,7 @@ type StreamStatus = "idle" | "streaming" | "error";
 
 const defaultTopic = "AI 如何改变内容创作";
 
-const emptyDoc: RichTextDocument = {
-  type: "doc",
-  content: [{ type: "paragraph", content: [{ type: "text", text: "" }] }],
-};
+const emptyDoc: RichTextDocument = replaceWithPlainText("");
 
 function textFromDoc(doc: RichTextDocument) {
   return doc.content
@@ -586,7 +583,7 @@ export default function WorkspacePage() {
             )}
           </div>
 
-          <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-4 border-t border-[#eeeeee] bg-white px-8 py-4">
+          <div className="sticky bottom-0 z-30 flex flex-wrap items-center justify-between gap-4 border-t border-[#eeeeee] bg-white px-8 py-4">
             <div className="flex flex-wrap items-center gap-6 text-sm text-[#8f959e]">
               <span>{status === "streaming" ? "AI 正在生成" : "草稿未保存"}</span>
               <span>共 {wordCount} 字</span>

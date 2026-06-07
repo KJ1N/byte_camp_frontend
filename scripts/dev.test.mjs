@@ -188,3 +188,42 @@ test("startDevProcesses waits for API readiness before spawning Web", async () =
   ]);
   assert.equal(children.length, 3);
 });
+
+test("startDevProcesses rejects when a child exits before API readiness", async () => {
+  const children = new Map();
+
+  const spawnProcess = (label) => {
+    const child = new EventEmitter();
+    child.killed = false;
+    child.kill = () => {
+      child.killed = true;
+    };
+    children.set(label, child);
+    return child;
+  };
+
+  await assert.rejects(
+    startDevProcesses(
+      {
+        webPort: 3200,
+        apiPort: 3201,
+        apiBaseUrl: "http://localhost:3201",
+      },
+      {},
+      {
+        registerProcessSignals: false,
+        setExitCode: () => {},
+        spawnProcess,
+        waitForApiReady: async () => {
+          children.get("apps/api").emit("exit", 1, null);
+          await new Promise(() => {});
+        },
+      },
+    ),
+    /apps\/api exited with code 1 before the API became ready/,
+  );
+
+  assert.equal(children.get("packages/shared").killed, true);
+  assert.equal(children.get("apps/api").killed, true);
+  assert.equal(children.has("apps/web"), false);
+});

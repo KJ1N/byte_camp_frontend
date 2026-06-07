@@ -2,8 +2,12 @@ import { ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
+import {
+  getApiBootstrapFailureMessage,
+  shouldLogApiBootstrapErrorDetails,
+} from "./bootstrap-error";
 
-async function bootstrap() {
+export async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
 
@@ -19,8 +23,12 @@ async function bootstrap() {
   await app.listen(config.get<number>("PORT") ?? 3001);
 }
 
-bootstrap().catch((error) => {
-  console.error("API bootstrap failed", error);
-  process.exit(1);
-});
-
+if (require.main === module) {
+  bootstrap().catch((error) => {
+    console.error(getApiBootstrapFailureMessage(error));
+    if (shouldLogApiBootstrapErrorDetails(error)) {
+      console.error(error);
+    }
+    process.exit(1);
+  });
+}

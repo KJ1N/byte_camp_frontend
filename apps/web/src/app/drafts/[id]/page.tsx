@@ -26,10 +26,7 @@ import {
   replaceWithPlainText,
 } from "@/lib/rich-text-document";
 
-const emptyDoc: RichTextDocument = {
-  type: "doc",
-  content: [{ type: "paragraph", content: [{ type: "text", text: "" }] }],
-};
+const emptyDoc: RichTextDocument = replaceWithPlainText("");
 
 const assistantSuggestion =
   "可以补充一个具体案例，说明创作者如何从选题、生成、编辑、审核到发布形成闭环，让文章更有说服力。";
@@ -335,7 +332,7 @@ export default function DraftEditorPage() {
             </>
           )}
 
-          <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-4 border-t border-[#eeeeee] bg-white px-8 py-4">
+          <div className="sticky bottom-0 z-30 flex flex-wrap items-center justify-between gap-4 border-t border-[#eeeeee] bg-white px-8 py-4">
             <div className="flex flex-wrap items-center gap-6 text-sm text-[#8f959e]">
               <span>
                 {restoringVersionId
@@ -385,7 +382,7 @@ export default function DraftEditorPage() {
         <aside className="hidden">
           <div className="mb-8 flex items-center justify-center gap-3">
             <span className="h-6 w-6 rounded-md bg-gradient-to-br from-[#ff5f62] to-[#8c7bff]" />
-            <h2 className="text-lg font-semibold">头条创作助手</h2>
+            <h2 className="text-lg font-semibold">AI创作助手</h2>
           </div>
 
           {restoreMessage ? (

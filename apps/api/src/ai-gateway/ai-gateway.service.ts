@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type {
   AiStreamEvent,
+  ComplianceRewriteContext,
   CreatorInspirationsResponse,
   GeneratedArticleDraft,
   GenerateArticleInput,
@@ -16,6 +17,7 @@ import { AiProviderConfigurationException } from "./ai-gateway.errors";
 import {
   ARTICLE_GENERATION_CATEGORY,
   buildArticleGenerationMessages,
+  buildComplianceRewriteMessages,
   buildRewriteMessages,
   buildTitleOptimizationMessages,
   defaultArticleGenerationPrompt,
@@ -123,6 +125,29 @@ export class AiGatewayService {
       yield { event: "suggestion", data: { text: suggestion } };
     }
     yield { event: "done", data: { text: response.text, suggestions: response.suggestions } };
+  }
+
+  async *streamComplianceRewrite(input: ComplianceRewriteContext): AsyncGenerator<AiStreamEvent> {
+    if (this.shouldUseLiveProvider()) {
+      yield* this.streamLiveComplianceRewrite(input);
+      return;
+    }
+
+    const response = this.rewriteMockComplianceText(input);
+
+    yield { event: "meta", data: { model: this.getMockModel() } };
+    yield { event: "text-delta", data: { text: response.text } };
+    for (const suggestion of response.suggestions) {
+      yield { event: "suggestion", data: { text: suggestion } };
+    }
+    yield {
+      event: "done",
+      data: {
+        bodyText: response.text,
+        body: this.toRichTextDocument(this.paragraphsFromText(response.text)),
+        suggestions: response.suggestions,
+      },
+    };
   }
 
   async generateCreatorInspirations(): Promise<CreatorInspirationsResponse> {
@@ -327,6 +352,43 @@ export class AiGatewayService {
     yield { event: "done", data: { text: parsed.text, suggestions: parsed.suggestions } };
   }
 
+  private async *streamLiveComplianceRewrite(input: ComplianceRewriteContext): AsyncGenerator<AiStreamEvent> {
+    const providerConfig = this.getRequiredProviderConfig();
+    const stream = this.streamProviderText(providerConfig, buildComplianceRewriteMessages(input));
+    let rawContent = "";
+    let emittedText = "";
+
+    for await (const delta of stream) {
+      if (!rawContent) {
+        yield { event: "meta", data: { model: delta.model } };
+      }
+
+      rawContent += delta.content;
+      const text = extractJsonStringPrefix(rawContent, "text");
+      if (text.length > emittedText.length) {
+        yield { event: "text-delta", data: { text: text.slice(emittedText.length) } };
+        emittedText = text;
+      }
+    }
+
+    const parsed = parseRewriteJson(rawContent);
+    if (parsed.text.length > emittedText.length) {
+      yield { event: "text-delta", data: { text: parsed.text.slice(emittedText.length) } };
+    }
+
+    for (const suggestion of parsed.suggestions) {
+      yield { event: "suggestion", data: { text: suggestion } };
+    }
+    yield {
+      event: "done",
+      data: {
+        bodyText: parsed.text,
+        body: this.toRichTextDocument(this.paragraphsFromText(parsed.text)),
+        suggestions: parsed.suggestions,
+      },
+    };
+  }
+
   private streamProviderText(providerConfig: ProviderConfig, messages: AiChatMessage[]) {
     return this.getProviderClient().streamText({
       ...providerConfig,
@@ -361,6 +423,19 @@ export class AiGatewayService {
       model: this.getMockModel(),
       text: `${prefixByMode[input.mode as RewriteModeValue]}: ${input.text}`,
       suggestions: ["补充一个具体案例", "结尾增加行动建议"],
+    };
+  }
+
+  private rewriteMockComplianceText(input: ComplianceRewriteContext): RewriteArticleResponse {
+    const evidenceText = input.audit.evidence.map((item) => item.text).filter(Boolean).join("、");
+    const text = `合规改写后: ${input.bodyText}`;
+
+    return {
+      model: this.getMockModel(),
+      text,
+      suggestions: [
+        evidenceText ? `已根据审核证据处理风险表达: ${evidenceText}` : "已根据审核建议降低风险表达",
+      ],
     };
   }
 

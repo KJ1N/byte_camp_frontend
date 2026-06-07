@@ -1,4 +1,9 @@
-import type { GenerateArticleInput, OptimizeTitlesInput, RewriteArticleInput } from "@bytecamp-aigc/shared";
+import type {
+  ComplianceRewriteContext,
+  GenerateArticleInput,
+  OptimizeTitlesInput,
+  RewriteArticleInput,
+} from "@bytecamp-aigc/shared";
 import type { AiChatMessage } from "./ai-provider.client";
 import { AiProviderBadOutputException } from "./ai-gateway.errors";
 
@@ -112,6 +117,45 @@ Mode rules:
 - EXPAND: add useful detail and examples.
 - SHORTEN: make the text shorter while keeping the key point.
 - CHANGE_STYLE: rewrite toward the target style.`,
+    },
+  ];
+}
+
+export function buildComplianceRewriteMessages(input: ComplianceRewriteContext): AiChatMessage[] {
+  const evidence = input.audit.evidence
+    .map((item, index) => `${index + 1}. ${item.text}: ${item.reason}`)
+    .join("\n");
+  const suggestions = input.audit.rewriteSuggestions
+    .map((item, index) => `${index + 1}. ${item}`)
+    .join("\n");
+
+  return [
+    {
+      role: "system",
+      content: `You are a Chinese compliance rewrite assistant.
+
+Return only JSON:
+{
+  "text": "rewritten full article body",
+  "suggestions": ["what was changed"]
+}`,
+    },
+    {
+      role: "user",
+      content: `Title: ${input.title}
+Audit decision: ${input.audit.decision}
+Risk level: ${input.audit.riskLevel}
+Risk categories: ${input.audit.categories.join(", ")}
+Audit summary: ${input.audit.summary}
+Evidence:
+${evidence || "No specific evidence"}
+Rewrite suggestions:
+${suggestions || "No specific rewrite suggestions"}
+
+Original body:
+${input.bodyText}
+
+请将正文改写为可重新提交审核的版本。保留原文的主要观点和段落结构，只处理风险表达、敏感个人信息、绝对化表述和低质量表达。不要新增无法验证的事实、数据来源或导流内容。`,
     },
   ];
 }

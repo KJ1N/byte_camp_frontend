@@ -141,6 +141,25 @@ export interface RewriteArticleResponse {
   suggestions: string[];
 }
 
+export interface ComplianceRewriteInput {
+  draftId: string;
+  auditRecordId?: string;
+}
+
+export interface ComplianceRewriteContext {
+  title: string;
+  bodyText: string;
+  audit: AuditResult;
+}
+
+export interface ComplianceRewriteDoneData {
+  draftId: string;
+  auditRecordId: string;
+  bodyText: string;
+  body: RichTextDocument;
+  suggestions: string[];
+}
+
 export type AiStreamEvent =
   | { event: "meta"; data: { model: string } }
   | { event: "title"; data: { text: string; index?: number; partial?: boolean } }

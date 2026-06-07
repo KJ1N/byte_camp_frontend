@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { AuditDecision, RiskCategory } from "@bytecamp-aigc/shared";
 import {
   buildRewriteMessages,
+  buildComplianceRewriteMessages,
   buildTitleOptimizationMessages,
   parseArticleGenerationJson,
   parseRewriteJson,
@@ -78,5 +80,30 @@ describe("rewrite prompts", () => {
 
     assert.equal(result.text, "Rewritten paragraph");
     assert.deepEqual(result.suggestions, ["Add an example", "Make the ending clearer"]);
+  });
+});
+
+describe("compliance rewrite prompts", () => {
+  it("builds compliance rewrite messages with audit evidence and suggestions", () => {
+    const messages = buildComplianceRewriteMessages({
+      title: "AI 内容发布前检查",
+      bodyText: "文章包含身份证号和手机号，需要发布前处理。",
+      audit: {
+        decision: AuditDecision.Warn,
+        riskLevel: "medium",
+        categories: [RiskCategory.SensitiveInfo],
+        evidence: [{ text: "身份证号和手机号", reason: "包含敏感个人信息" }],
+        rewriteSuggestions: ["删除或脱敏个人信息"],
+        summary: "内容需要修改后重新审核。",
+      },
+    });
+
+    assert.equal(messages.length, 2);
+    assert.match(messages[0].content, /compliance rewrite assistant/i);
+    assert.match(messages[1].content, /AI 内容发布前检查/);
+    assert.match(messages[1].content, /SENSITIVE_INFO/);
+    assert.match(messages[1].content, /身份证号和手机号/);
+    assert.match(messages[1].content, /删除或脱敏个人信息/);
+    assert.match(messages[1].content, /保留原文的主要观点和段落结构/);
   });
 });
