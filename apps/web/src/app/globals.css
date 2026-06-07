@@ -18,4 +18,21 @@
   input[type="password"]::-ms-reveal {
     display: none;
   }
+
+  button,
+  a,
+  [role="button"],
+  input[type="submit"],
+  input[type="button"],
+  input[type="reset"] {
+    @apply cursor-pointer;
+  }
+
+  button:disabled,
+  a:disabled,
+  [role="button"]:disabled,
+  input:disabled,
+  [disabled] {
+    @apply cursor-not-allowed pointer-events-none;
+  }
 }

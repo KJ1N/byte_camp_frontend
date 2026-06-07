@@ -138,6 +138,53 @@ async function main() {
     },
   });
 
+  const reviewDemoDrafts = [
+    {
+      id: "demo-draft-warn-001",
+      title: "需要修改的健康建议草稿",
+      bodyText: [
+        "很多人在工作压力大时会寻找快速恢复状态的方法。",
+        "但如果文章写成每天喝白糖水就能百分百见效，甚至暗示无需就医，就会形成虚假医疗或绝对化表达风险。",
+        "这篇草稿用于演示 WARN 审核结果、风险证据和一键合规改写流程。",
+      ],
+    },
+    {
+      id: "demo-draft-block-001",
+      title: "禁止发布的高风险草稿",
+      bodyText: [
+        "这是一篇用于演示 BLOCK 审核结果的草稿。",
+        "正文包含参与赌博可以快速回本、稳赚不赔等高风险引导表达，发布前必须被拦截。",
+        "演示时可以进入发布确认页，确认系统禁止直接发布。",
+      ],
+    },
+  ];
+
+  for (const draft of reviewDemoDrafts) {
+    const body = {
+      type: "doc",
+      content: draft.bodyText.map((text) => ({
+        type: "paragraph",
+        content: [{ type: "text", text }],
+      })),
+    };
+
+    await prisma.draft.upsert({
+      where: { id: draft.id },
+      update: {
+        title: draft.title,
+        body,
+        status: "DRAFT",
+      },
+      create: {
+        id: draft.id,
+        authorId: demoUser.id,
+        title: draft.title,
+        body,
+        status: "DRAFT",
+      },
+    });
+  }
+
   const publishedArticles = [
     {
       draftId: "demo-published-draft-001",

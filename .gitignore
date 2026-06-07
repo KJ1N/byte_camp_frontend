@@ -19,6 +19,7 @@ pids
 coverage
 *.lcov
 .nyc_output
+test-results/
 dist
 out
 build/Release
