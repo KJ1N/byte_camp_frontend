@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import type {
+  AssetSummary,
   DraftSummary,
   GeneratedArticleDraft,
   ListPromptsResponse,
@@ -13,6 +14,7 @@ import type {
 } from "@bytecamp-aigc/shared";
 
 import { AiWritingAssistant } from "@/components/ai-writing-assistant";
+import { AssetPanel } from "@/components/asset-panel";
 import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { PromptManagerPanel } from "@/components/prompt-manager-panel";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
@@ -25,6 +27,12 @@ import {
 } from "@/lib/rich-text-document";
 import { nextSelectedPromptIdAfterDelete } from "@/lib/prompt-management";
 import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
+import {
+  createWorkspaceImageInsertRequest,
+  workspaceSidePanelTabs,
+  type EditorImageInsertRequest,
+  type WorkspaceSidePanelTab,
+} from "@/lib/workspace-assets";
 
 const styleOptions = ["科普", "新闻", "轻松", "严谨", "种草"];
 const rewriteModes = [
@@ -81,6 +89,8 @@ export default function WorkspacePage() {
   const [rewriteResult, setRewriteResult] = useState("");
   const [rewriteSuggestions, setRewriteSuggestions] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const [sidePanelTab, setSidePanelTab] = useState<WorkspaceSidePanelTab>("ai");
+  const [imageInsertRequest, setImageInsertRequest] = useState<EditorImageInsertRequest | null>(null);
 
   useEffect(() => {
     const storedToken = getStoredToken();
@@ -371,6 +381,12 @@ export default function WorkspacePage() {
     }));
   }
 
+  function insertAssetImage(asset: AssetSummary) {
+    setError("");
+    setGenerated((current) => current ?? createEmptyGenerated());
+    setImageInsertRequest(createWorkspaceImageInsertRequest(asset));
+  }
+
   async function saveDraft() {
     if (!token || !generated || status === "streaming") return;
 
@@ -588,7 +604,11 @@ export default function WorkspacePage() {
                       </div>
                     ) : null}
                     <div className="mt-8">
-                      <RichTextEditor value={generated.body} onChange={updateGeneratedBody} />
+                      <RichTextEditor
+                        value={generated.body}
+                        insertImageRequest={imageInsertRequest}
+                        onChange={updateGeneratedBody}
+                      />
                     </div>
                   </>
                 ) : (
@@ -768,20 +788,42 @@ export default function WorkspacePage() {
             ) : null}
           </div>
         </aside>
-        <AiWritingAssistant
-          authToken={token}
-          topic={topic}
-          audience={audience}
-          style={style}
-          currentTitle={draftTitle}
-          bodyText={generated?.bodyText ?? ""}
-          previewTitle={generated?.title}
-          previewBodyText={generated?.bodyText}
-          recentDrafts={drafts}
-          onSelectTitle={setDraftTitle}
-          onReplaceBody={replaceGeneratedBody}
-          onAppendBody={appendGeneratedBody}
-        />
+        <div className="grid h-fit gap-3">
+          <div className="flex rounded-lg bg-white p-1 text-sm font-semibold">
+            {workspaceSidePanelTabs.map((item) => (
+              <button
+                className={[
+                  "min-w-0 flex-1 rounded-md px-3 py-2",
+                  sidePanelTab === item.id ? "bg-[#fff1f1] text-[#ff4d4f]" : "text-[#6b7280] hover:bg-[#f6f7f9]",
+                ].join(" ")}
+                key={item.id}
+                type="button"
+                onClick={() => setSidePanelTab(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {sidePanelTab === "assets" ? (
+            <AssetPanel authToken={token} onInsertImage={insertAssetImage} />
+          ) : (
+            <AiWritingAssistant
+              authToken={token}
+              topic={topic}
+              audience={audience}
+              style={style}
+              currentTitle={draftTitle}
+              bodyText={generated?.bodyText ?? ""}
+              previewTitle={generated?.title}
+              previewBodyText={generated?.bodyText}
+              recentDrafts={drafts}
+              onSelectTitle={setDraftTitle}
+              onReplaceBody={replaceGeneratedBody}
+              onAppendBody={appendGeneratedBody}
+            />
+          )}
+        </div>
       </div>
     </main>
   );
