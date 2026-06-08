@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import {
+  AuditDecision,
   AssetAuditStatus,
   AssetFolderKind,
   AssetKind,
-  RiskCategory,
+  type AuditResult,
   type AssetAuditResult,
   type AssetFolderMutationResponse,
   type AssetFolderSummary,
@@ -18,6 +19,7 @@ import {
   type RenameAssetFolderInput,
   type UploadAssetResponse,
 } from "@bytecamp-aigc/shared";
+import { AuditService } from "../audit/audit.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AssetAuditService } from "./asset-audit.service";
 import { CloudStorageService } from "./cloud-storage.service";
@@ -77,13 +79,6 @@ const extensionByMimeType: Record<string, string> = {
   [docxMimeType]: "docx",
 };
 const riskyFilenamePattern = /赌博|博彩|赌场|毒品|违禁品|违法|犯罪|色情|低俗|露骨/i;
-const riskyDocumentRules: Array<{ pattern: RegExp; category: RiskCategory; reason: string }> = [
-  { pattern: /赌博|博彩|赌场/i, category: RiskCategory.Gambling, reason: "资料文本命中赌博或博彩风险词。" },
-  { pattern: /毒品|违禁品/i, category: RiskCategory.Drugs, reason: "资料文本命中毒品或违禁品风险词。" },
-  { pattern: /违法|犯罪/i, category: RiskCategory.Illegal, reason: "资料文本命中违法犯罪风险词。" },
-  { pattern: /色情|低俗|露骨/i, category: RiskCategory.Adult, reason: "资料文本命中成人低俗风险词。" },
-  { pattern: /身份证|银行卡|手机号/i, category: RiskCategory.SensitiveInfo, reason: "资料文本包含敏感个人信息。" },
-];
 
 @Injectable()
 export class AssetsService {
@@ -91,6 +86,7 @@ export class AssetsService {
     private readonly prisma: PrismaService,
     private readonly assetAudit: AssetAuditService,
     private readonly storage: CloudStorageService,
+    private readonly auditService: AuditService,
   ) {}
 
   async createFolder(userId: string, input: CreateAssetFolderInput): Promise<AssetFolderMutationResponse> {
@@ -159,7 +155,7 @@ export class AssetsService {
             mimeType: file.mimetype,
             filename: originalName,
           })
-        : this.auditDocumentText(documentText, originalName);
+        : await this.auditDocumentText(documentText, originalName);
 
     if (audit.decision === AssetAuditStatus.Blocked) {
       throw new BadRequestException(audit.summary || "素材未通过审核。");
@@ -282,35 +278,39 @@ export class AssetsService {
     return /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(decoded) ? decoded : originalName;
   }
 
-  private auditDocumentText(text: string, filename: string): AssetAuditResult {
-    for (const rule of riskyDocumentRules) {
-      const match = text.match(rule.pattern);
-      if (!match) continue;
+  private async auditDocumentText(text: string, filename: string): Promise<AssetAuditResult> {
+    const result = await this.auditService.checkText(`${filename}\n${text}`);
+    return this.mapContentAuditResult(result);
+  }
 
-      return {
-        decision: AssetAuditStatus.Blocked,
-        riskLevel: "high",
-        categories: [rule.category],
-        evidence: [{ text: match[0], reason: rule.reason }],
-        summary: "资料文件文本合规检查未通过，禁止上传。",
-        model: "asset-document-rules",
-        source: "MOCK",
-      };
-    }
-
+  private createDocumentAuditResult(): AssetAuditResult {
     return {
       decision: AssetAuditStatus.Passed,
       riskLevel: "none",
       categories: [],
       evidence: [],
-      summary: `${filename} 资料文本合规检查通过。`,
-      model: "asset-document-rules",
+      summary: "资料文本合规检查通过。",
+      model: "content-audit",
       source: "MOCK",
     };
   }
 
-  private createDocumentAuditResult(): AssetAuditResult {
-    return this.auditDocumentText("", "资料文件");
+  private mapContentAuditResult(result: AuditResult): AssetAuditResult {
+    return {
+      decision: this.mapAuditDecision(result.decision),
+      riskLevel: result.riskLevel,
+      categories: result.categories,
+      evidence: result.evidence,
+      summary: result.summary,
+      model: result.model ?? "content-audit",
+      source: result.source ?? "MOCK",
+    };
+  }
+
+  private mapAuditDecision(decision: AuditDecision): AssetAuditStatus {
+    if (decision === AuditDecision.Block) return AssetAuditStatus.Blocked;
+    if (decision === AuditDecision.Warn) return AssetAuditStatus.Warn;
+    return AssetAuditStatus.Passed;
   }
 
   private extractDocumentText(file: UploadedAssetFile, filename: string) {
@@ -350,6 +350,9 @@ export class AssetsService {
   }
 
   private readZipEntry(buffer: Buffer, targetName: string): string {
+    const centralDirectoryEntry = this.readZipEntryFromCentralDirectory(buffer, targetName);
+    if (centralDirectoryEntry) return centralDirectoryEntry;
+
     let offset = 0;
 
     while (offset + 30 <= buffer.length) {
@@ -377,15 +380,87 @@ export class AssetsService {
       const entryName = buffer.subarray(nameStart, nameEnd).toString("utf8");
       const compressed = buffer.subarray(dataStart, dataEnd);
       if (entryName === targetName) {
-        if (compressionMethod === 0) return compressed.toString("utf8");
-        if (compressionMethod === 8) return inflateRawSync(compressed).toString("utf8");
-        throw new BadRequestException("docx 正文压缩格式暂不支持。");
+        return this.decodeZipPayload(compressed, compressionMethod);
       }
 
       offset = dataEnd;
     }
 
     return "";
+  }
+
+  private readZipEntryFromCentralDirectory(buffer: Buffer, targetName: string): string {
+    const endOffset = this.findEndOfCentralDirectoryOffset(buffer);
+    if (endOffset < 0 || endOffset + 22 > buffer.length) return "";
+
+    const entryCount = buffer.readUInt16LE(endOffset + 10);
+    const centralDirectoryOffset = buffer.readUInt32LE(endOffset + 16);
+    let offset = centralDirectoryOffset;
+
+    for (let index = 0; index < entryCount && offset + 46 <= buffer.length; index += 1) {
+      const signature = buffer.readUInt32LE(offset);
+      if (signature !== 0x02014b50) return "";
+
+      const compressionMethod = buffer.readUInt16LE(offset + 10);
+      const compressedSize = buffer.readUInt32LE(offset + 20);
+      const fileNameLength = buffer.readUInt16LE(offset + 28);
+      const extraLength = buffer.readUInt16LE(offset + 30);
+      const commentLength = buffer.readUInt16LE(offset + 32);
+      const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+      const nameStart = offset + 46;
+      const nameEnd = nameStart + fileNameLength;
+
+      if (nameEnd > buffer.length) return "";
+
+      const entryName = buffer.subarray(nameStart, nameEnd).toString("utf8");
+      if (entryName === targetName) {
+        if (compressedSize === 0xffffffff || localHeaderOffset === 0xffffffff) {
+          throw new BadRequestException("docx Zip64 正文格式暂不支持。");
+        }
+
+        return this.readZipEntryFromLocalHeader(buffer, localHeaderOffset, compressedSize, compressionMethod);
+      }
+
+      offset = nameEnd + extraLength + commentLength;
+    }
+
+    return "";
+  }
+
+  private readZipEntryFromLocalHeader(
+    buffer: Buffer,
+    offset: number,
+    compressedSize: number,
+    compressionMethod: number,
+  ): string {
+    if (offset + 30 > buffer.length || buffer.readUInt32LE(offset) !== 0x04034b50) return "";
+
+    const fileNameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const dataStart = offset + 30 + fileNameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataStart > buffer.length || dataEnd > buffer.length) return "";
+
+    return this.decodeZipPayload(buffer.subarray(dataStart, dataEnd), compressionMethod);
+  }
+
+  private findEndOfCentralDirectoryOffset(buffer: Buffer) {
+    const minimumOffset = Math.max(0, buffer.length - 65_557);
+
+    for (let offset = buffer.length - 22; offset >= minimumOffset; offset -= 1) {
+      if (buffer.readUInt32LE(offset) !== 0x06054b50) continue;
+
+      const commentLength = buffer.readUInt16LE(offset + 20);
+      if (offset + 22 + commentLength === buffer.length) return offset;
+    }
+
+    return -1;
+  }
+
+  private decodeZipPayload(payload: Buffer, compressionMethod: number) {
+    if (compressionMethod === 0) return payload.toString("utf8");
+    if (compressionMethod === 8) return inflateRawSync(payload).toString("utf8");
+    throw new BadRequestException("docx 正文压缩格式暂不支持。");
   }
 
   private decodeXmlEntities(value: string) {

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { deflateRawSync } from "node:zlib";
 import { describe, it } from "node:test";
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
-import { AssetAuditStatus, AssetFolderKind, AssetKind } from "@bytecamp-aigc/shared";
+import { AssetAuditStatus, AssetFolderKind, AssetKind, AuditDecision, RiskCategory } from "@bytecamp-aigc/shared";
+import type { AuditService } from "../audit/audit.service";
 import type { AssetAuditService } from "./asset-audit.service";
 import { AssetsService, type UploadedAssetFile } from "./assets.service";
 import type { CloudStorageService } from "./cloud-storage.service";
@@ -16,9 +18,12 @@ function createFile(overrides: Partial<UploadedAssetFile> = {}): UploadedAssetFi
   };
 }
 
-function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: string } = {}) {
+function createService(
+  options: { auditDecision?: AssetAuditStatus; textAuditDecision?: AuditDecision; ownerId?: string } = {},
+) {
   const calls = {
     auditInputs: [] as Array<{ filename: string; mimeType: string }>,
+    textAuditInputs: [] as string[],
     uploads: [] as Array<{ key: string; contentType: string }>,
     deletes: [] as string[],
     createdAssets: [] as Array<{ authorId: string; filename: string; url: string; auditStatus: string }>,
@@ -27,6 +32,7 @@ function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: st
   const assets = new Map<string, any>();
   const folders = new Map<string, any>();
   const auditDecision = options.auditDecision ?? AssetAuditStatus.Passed;
+  const textAuditDecision = options.textAuditDecision ?? AuditDecision.Pass;
   const ownerId = options.ownerId ?? "user-1";
   const imageFolder = {
     id: "folder-image",
@@ -119,6 +125,29 @@ function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: st
       };
     },
   };
+  const contentAudit = {
+    checkText: async (text: string) => {
+      calls.textAuditInputs.push(text);
+      return {
+        decision: textAuditDecision,
+        riskLevel: textAuditDecision === AuditDecision.Block ? "high" : textAuditDecision === AuditDecision.Warn ? "medium" : "none",
+        categories: textAuditDecision === AuditDecision.Pass ? [] : [RiskCategory.Misleading],
+        evidence:
+          textAuditDecision === AuditDecision.Pass
+            ? []
+            : [{ text: "内容分发口径", reason: "发布前审核规则命中素材文本。" }],
+        rewriteSuggestions: textAuditDecision === AuditDecision.Pass ? [] : ["按发布前审核建议调整素材表述。"],
+        summary:
+          textAuditDecision === AuditDecision.Block
+            ? "发布前审核拦截素材文本"
+            : textAuditDecision === AuditDecision.Warn
+              ? "发布前审核提示素材文本需要修改"
+              : "发布前审核通过",
+        model: "publish-audit-mock",
+        source: "MOCK" as const,
+      };
+    },
+  };
   const storage = {
     uploadObject: async ({ key, contentType }: { key: string; contentType: string }) => {
       calls.uploads.push({ key, contentType });
@@ -138,6 +167,7 @@ function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: st
       prisma as never,
       audit as unknown as AssetAuditService,
       storage as unknown as CloudStorageService,
+      contentAudit as unknown as AuditService,
     ),
     calls,
     assets,
@@ -216,6 +246,7 @@ describe("AssetsService", () => {
     assert.equal(result.asset.metadata.textContent, "# brief");
     assert.equal(result.asset.metadata.textPreview, "# brief");
     assert.equal(calls.auditInputs.length, 0);
+    assert.deepEqual(calls.textAuditInputs, ["brief.md\n# brief"]);
   });
 
   it("extracts text from a docx document before cloud upload", async () => {
@@ -236,8 +267,45 @@ describe("AssetsService", () => {
     assert.equal(result.asset.metadata.textContent, "第一段资料\n第二段资料");
   });
 
-  it("blocks risky document text before cloud upload and persistence", async () => {
-    const { service, calls, documentFolderId } = createService();
+  it("extracts text from a docx whose local header uses a data descriptor", async () => {
+    const { service, documentFolderId } = createService();
+
+    const result = await service.uploadAsset(
+      "user-1",
+      createFile({
+        originalname: "wechat-import.docx",
+        mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size: 8_000,
+        buffer: createDocxBufferWithDataDescriptor("微信导入正文\n第二段正文"),
+      }),
+      documentFolderId,
+    );
+
+    assert.equal(result.asset.kind, AssetKind.Document);
+    assert.equal(result.asset.metadata.textContent, "微信导入正文\n第二段正文");
+  });
+
+  it("keeps WARN documents usable but records the publish audit status", async () => {
+    const { service, documentFolderId } = createService({ textAuditDecision: AuditDecision.Warn });
+
+    const result = await service.uploadAsset(
+      "user-1",
+      createFile({
+        originalname: "warn-brief.txt",
+        mimetype: "text/plain",
+        size: 64,
+        buffer: Buffer.from("这是一段需要发布前提示的普通素材文本"),
+      }),
+      documentFolderId,
+    );
+
+    assert.equal(result.asset.auditStatus, AssetAuditStatus.Warn);
+    assert.equal(result.asset.metadata.audit.summary, "发布前审核提示素材文本需要修改");
+    assert.deepEqual(result.asset.metadata.audit.categories, [RiskCategory.Misleading]);
+  });
+
+  it("blocks document text when the publish audit service blocks it", async () => {
+    const { service, calls, documentFolderId } = createService({ textAuditDecision: AuditDecision.Block });
 
     await assert.rejects(
       () =>
@@ -247,7 +315,7 @@ describe("AssetsService", () => {
             originalname: "brief.txt",
             mimetype: "text/plain",
             size: 64,
-            buffer: Buffer.from("这份资料包含赌博引流话术"),
+            buffer: Buffer.from("这是一段由发布前审核判定高风险的普通素材文本"),
           }),
           documentFolderId,
         ),
@@ -444,4 +512,78 @@ function createDocxBuffer(text: string): Buffer {
   header.writeUInt16LE(filename.length, 26);
   header.writeUInt16LE(0, 28);
   return Buffer.concat([header, filename, xml]);
+}
+
+function createDocxBufferWithDataDescriptor(text: string): Buffer {
+  const xml = createDocumentXml(text);
+  const filename = Buffer.from("word/document.xml");
+  const compressed = deflateRawSync(xml);
+  const localHeaderOffset = 0;
+  const localHeader = Buffer.alloc(30);
+  localHeader.writeUInt32LE(0x04034b50, 0);
+  localHeader.writeUInt16LE(20, 4);
+  localHeader.writeUInt16LE(0x0808, 6);
+  localHeader.writeUInt16LE(8, 8);
+  localHeader.writeUInt32LE(0, 10);
+  localHeader.writeUInt32LE(0, 14);
+  localHeader.writeUInt32LE(0, 18);
+  localHeader.writeUInt32LE(0, 22);
+  localHeader.writeUInt16LE(filename.length, 26);
+  localHeader.writeUInt16LE(0, 28);
+
+  const dataDescriptor = Buffer.alloc(16);
+  dataDescriptor.writeUInt32LE(0x08074b50, 0);
+  dataDescriptor.writeUInt32LE(0, 4);
+  dataDescriptor.writeUInt32LE(compressed.length, 8);
+  dataDescriptor.writeUInt32LE(xml.length, 12);
+
+  const centralDirectoryOffset = localHeader.length + filename.length + compressed.length + dataDescriptor.length;
+  const centralHeader = Buffer.alloc(46);
+  centralHeader.writeUInt32LE(0x02014b50, 0);
+  centralHeader.writeUInt16LE(20, 4);
+  centralHeader.writeUInt16LE(20, 6);
+  centralHeader.writeUInt16LE(0x0808, 8);
+  centralHeader.writeUInt16LE(8, 10);
+  centralHeader.writeUInt32LE(0, 12);
+  centralHeader.writeUInt32LE(0, 16);
+  centralHeader.writeUInt32LE(compressed.length, 20);
+  centralHeader.writeUInt32LE(xml.length, 24);
+  centralHeader.writeUInt16LE(filename.length, 28);
+  centralHeader.writeUInt16LE(0, 30);
+  centralHeader.writeUInt16LE(0, 32);
+  centralHeader.writeUInt16LE(0, 34);
+  centralHeader.writeUInt16LE(0, 36);
+  centralHeader.writeUInt32LE(0, 38);
+  centralHeader.writeUInt32LE(localHeaderOffset, 42);
+
+  const centralDirectorySize = centralHeader.length + filename.length;
+  const endOfCentralDirectory = Buffer.alloc(22);
+  endOfCentralDirectory.writeUInt32LE(0x06054b50, 0);
+  endOfCentralDirectory.writeUInt16LE(0, 4);
+  endOfCentralDirectory.writeUInt16LE(0, 6);
+  endOfCentralDirectory.writeUInt16LE(1, 8);
+  endOfCentralDirectory.writeUInt16LE(1, 10);
+  endOfCentralDirectory.writeUInt32LE(centralDirectorySize, 12);
+  endOfCentralDirectory.writeUInt32LE(centralDirectoryOffset, 16);
+  endOfCentralDirectory.writeUInt16LE(0, 20);
+
+  return Buffer.concat([
+    localHeader,
+    filename,
+    compressed,
+    dataDescriptor,
+    centralHeader,
+    filename,
+    endOfCentralDirectory,
+  ]);
+}
+
+function createDocumentXml(text: string): Buffer {
+  const escaped = text
+    .split("\n")
+    .map((line) => `<w:p><w:r><w:t>${line}</w:t></w:r></w:p>`)
+    .join("");
+  return Buffer.from(
+    `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${escaped}</w:body></w:document>`,
+  );
 }
