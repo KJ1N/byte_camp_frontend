@@ -152,8 +152,14 @@ export class AssetsService {
   }
 
   private sanitizeOriginalName(originalName: string) {
-    const name = originalName.split(/[\\/]/).pop()?.trim();
+    const name = this.decodeMultipartFilename(originalName).split(/[\\/]/).pop()?.trim();
     return name || "asset";
+  }
+
+  private decodeMultipartFilename(originalName: string) {
+    const decoded = Buffer.from(originalName, "latin1").toString("utf8");
+    if (decoded === originalName || decoded.includes("\uFFFD")) return originalName;
+    return /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(decoded) ? decoded : originalName;
   }
 
   private createDocumentAuditResult(): AssetAuditResult {
@@ -176,7 +182,7 @@ export class AssetsService {
       kind: metadata.kind,
       filename: asset.filename,
       mimeType: asset.mimeType,
-      url: asset.url,
+      url: metadata.storageKey ? this.storage.getObjectUrl(metadata.storageKey) : asset.url,
       auditStatus: asset.auditStatus as AssetAuditStatus,
       metadata: publicMetadata,
       createdAt: asset.createdAt.toISOString(),
@@ -189,7 +195,7 @@ export class AssetsService {
 
     return {
       kind: metadata.kind === AssetKind.Document ? AssetKind.Document : AssetKind.Image,
-      originalName: typeof metadata.originalName === "string" ? metadata.originalName : "",
+      originalName: typeof metadata.originalName === "string" ? this.decodeMultipartFilename(metadata.originalName) : "",
       size: typeof metadata.size === "number" ? metadata.size : 0,
       storageKey: typeof metadata.storageKey === "string" ? metadata.storageKey : "",
       audit: audit as AssetAuditResult,

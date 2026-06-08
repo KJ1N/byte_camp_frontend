@@ -2,31 +2,22 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   EngagementEventType,
   type ArticleDetail,
   type ArticleEngagementStats,
   type CreateEngagementEventResponse,
-  type RichTextDocument,
-  type RichTextNode,
 } from "@bytecamp-aigc/shared";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
+import { RichTextViewer } from "@/components/editor/rich-text-viewer";
 import {
   consumeArticleViewIntent,
   hasRecordedEngagement,
   markEngagementRecorded,
   shouldRecordArticleView,
 } from "@/lib/engagement-state";
-
-function textFromNode(node: RichTextNode): string {
-  return [node.text ?? "", ...(node.content ?? []).map((child) => textFromNode(child))].join("");
-}
-
-function linesFromDoc(doc: RichTextDocument) {
-  return doc.content.map((node) => textFromNode(node).trim()).filter(Boolean);
-}
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -50,8 +41,6 @@ export default function ArticleDetailPage() {
   const [favorited, setFavorited] = useState(false);
   const [pendingEvent, setPendingEvent] = useState<EngagementEventType | null>(null);
   const viewedArticleIdRef = useRef<string | null>(null);
-
-  const paragraphs = useMemo(() => (article ? linesFromDoc(article.body) : []), [article]);
 
   useEffect(() => {
     setUser(getStoredUser());
@@ -194,10 +183,8 @@ export default function ArticleDetailPage() {
                 <span>{article.author.nickname}</span>
                 <span>{formatTime(article.publishedAt)}</span>
               </div>
-              <div className="mt-9 max-w-[820px] space-y-5 text-[17px] leading-9 text-[#2f3640]">
-                {paragraphs.map((paragraph, index) => (
-                  <p key={`${paragraph}-${index}`}>{paragraph}</p>
-                ))}
+              <div className="mt-9 max-w-[820px]">
+                <RichTextViewer value={article.body} />
               </div>
             </>
           ) : null}

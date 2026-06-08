@@ -22,6 +22,7 @@ function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: st
     uploads: [] as Array<{ key: string; contentType: string }>,
     deletes: [] as string[],
     createdAssets: [] as Array<{ authorId: string; filename: string; url: string; auditStatus: string }>,
+    objectUrls: [] as string[],
   };
   const assets = new Map<string, any>();
   const auditDecision = options.auditDecision ?? AssetAuditStatus.Passed;
@@ -71,6 +72,10 @@ function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: st
     deleteObject: async (key: string) => {
       calls.deletes.push(key);
     },
+    getObjectUrl: (key: string) => {
+      calls.objectUrls.push(key);
+      return `https://cdn.example.com/${key}`;
+    },
   };
 
   return {
@@ -98,6 +103,16 @@ describe("AssetsService", () => {
     assert.equal(calls.auditInputs.length, 1);
     assert.deepEqual(calls.uploads, [{ key: `assets/user-1/${result.asset.id}.png`, contentType: "image/png" }]);
     assert.equal(calls.createdAssets[0].authorId, "user-1");
+  });
+
+  it("decodes UTF-8 filenames that multipart parsers expose as latin1 text", async () => {
+    const { service, calls } = createService();
+    const garbledName = Buffer.from("头图.jpg", "utf8").toString("latin1");
+
+    const result = await service.uploadAsset("user-1", createFile({ originalname: garbledName }));
+
+    assert.equal(result.asset.metadata.originalName, "头图.jpg");
+    assert.equal(calls.auditInputs[0].filename, "头图.jpg");
   });
 
   it("uploads a document without visual audit and keeps it non-insertable for the editor", async () => {
@@ -162,6 +177,72 @@ describe("AssetsService", () => {
 
     assert.equal(result.items.length, 1);
     assert.equal(result.items[0].metadata.originalName, "cover.png");
+  });
+
+  it("repairs legacy garbled original names when listing assets", async () => {
+    const { service, assets } = createService();
+    const garbledName = Buffer.from("头像.jpg", "utf8").toString("latin1");
+    assets.set("asset-legacy", {
+      id: "asset-legacy",
+      authorId: "user-1",
+      filename: "asset-legacy.jpg",
+      mimeType: "image/jpeg",
+      url: "https://cdn.example.com/assets/user-1/asset-legacy.jpg",
+      auditStatus: AssetAuditStatus.Passed,
+      metadata: {
+        kind: AssetKind.Image,
+        originalName: garbledName,
+        size: 1024,
+        storageKey: "assets/user-1/asset-legacy.jpg",
+        audit: {
+          decision: AssetAuditStatus.Passed,
+          riskLevel: "none",
+          categories: [],
+          evidence: [],
+          summary: "视觉审核通过",
+          model: "vision-audit-mock",
+          source: "MOCK",
+        },
+      },
+      createdAt: new Date("2026-06-07T10:00:00.000Z"),
+    });
+
+    const result = await service.listMine("user-1");
+
+    assert.equal(result.items[0].metadata.originalName, "头像.jpg");
+  });
+
+  it("refreshes listed asset URLs from the storage key so private bucket links stay readable", async () => {
+    const { service, assets, calls } = createService();
+    assets.set("asset-legacy", {
+      id: "asset-legacy",
+      authorId: "user-1",
+      filename: "asset-legacy.jpg",
+      mimeType: "image/jpeg",
+      url: "https://cdn.example.com/assets/user-1/asset-legacy.jpg",
+      auditStatus: AssetAuditStatus.Passed,
+      metadata: {
+        kind: AssetKind.Image,
+        originalName: "头像.jpg",
+        size: 1024,
+        storageKey: "assets/user-1/asset-legacy.jpg",
+        audit: {
+          decision: AssetAuditStatus.Passed,
+          riskLevel: "none",
+          categories: [],
+          evidence: [],
+          summary: "视觉审核通过",
+          model: "vision-audit-mock",
+          source: "MOCK",
+        },
+      },
+      createdAt: new Date("2026-06-07T10:00:00.000Z"),
+    });
+
+    const result = await service.listMine("user-1");
+
+    assert.equal(result.items[0].url, "https://cdn.example.com/assets/user-1/asset-legacy.jpg");
+    assert.deepEqual(calls.objectUrls, ["assets/user-1/asset-legacy.jpg"]);
   });
 
   it("deletes only owned assets and removes the cloud object", async () => {
