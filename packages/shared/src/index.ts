@@ -236,6 +236,12 @@ export interface DraftVersionSummary {
   createdAt: string;
 }
 
+export interface DeleteDraftResponse {
+  draftId: string;
+  deletedArticleIds: string[];
+  message: string;
+}
+
 export interface RestoreDraftVersionInput {
   versionId: string;
 }

@@ -1,9 +1,11 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
 import {
+  ArticleStatus,
   DraftMode,
   DraftStatus,
   type CreateDraftInput,
+  type DeleteDraftResponse,
   type DraftDetail,
   type DraftSummary,
   type DraftVersionSummary,
@@ -13,10 +15,14 @@ import {
   type UpdateDraftInput,
 } from "@bytecamp-aigc/shared";
 import { PrismaService } from "../prisma/prisma.service";
+import { RankingCacheService } from "../ranking/ranking-cache.service";
 
 @Injectable()
 export class DraftsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rankingCacheService?: RankingCacheService,
+  ) {}
 
   async createDraft(authorId: string, input: CreateDraftInput): Promise<DraftDetail> {
     const title = this.ensureTitle(input.title);
@@ -175,6 +181,36 @@ export class DraftsService {
         restoredFromVersion: version.version,
       };
     });
+  }
+
+  async deleteDraft(authorId: string, id: string): Promise<DeleteDraftResponse> {
+    const draft = await this.prisma.draft.findFirst({
+      where: { id, authorId },
+      select: { id: true },
+    });
+
+    if (!draft) throw new NotFoundException("Draft not found");
+
+    const linkedArticles = await this.prisma.article.findMany({
+      where: { draftId: draft.id, authorId },
+      select: { id: true, status: true },
+    });
+
+    await this.prisma.draft.delete({
+      where: { id: draft.id },
+    });
+
+    await Promise.all(
+      linkedArticles
+        .filter((article) => article.status === ArticleStatus.Published)
+        .map((article) => this.rankingCacheService?.removeArticle(article.id)),
+    );
+
+    return {
+      draftId: draft.id,
+      deletedArticleIds: linkedArticles.map((article) => article.id),
+      message: "Draft deleted successfully.",
+    };
   }
 
   private ensureTitle(value: string) {

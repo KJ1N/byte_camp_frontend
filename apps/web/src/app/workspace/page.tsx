@@ -26,6 +26,7 @@ import {
   replaceWithPlainText,
 } from "@/lib/rich-text-document";
 import { nextSelectedPromptIdAfterDelete } from "@/lib/prompt-management";
+import { buildWorkspaceGeneratedBody } from "@/lib/workspace-generated-body";
 import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
 import {
   createWorkspaceImageInsertRequest,
@@ -232,7 +233,10 @@ export default function WorkspacePage() {
 
         if (eventName === "done" && isRecord(data)) {
           const finalBodyText = typeof data.bodyText === "string" ? data.bodyText : bodyText;
-          const finalBody = isRichTextDocument(data.body) ? data.body : replaceWithPlainText(finalBodyText);
+          const finalBody = buildWorkspaceGeneratedBody(
+            finalBodyText,
+            isRichTextDocument(data.body) ? data.body : undefined,
+          );
           setGenerated((current) => ({
             ...(current ?? createEmptyGenerated()),
             title: typeof data.title === "string" ? data.title : current?.title ?? "",

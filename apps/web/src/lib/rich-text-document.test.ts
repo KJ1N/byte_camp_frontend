@@ -19,6 +19,19 @@ describe("rich text document helpers", () => {
     assert.equal(doc.content[1].content?.[0].text, "Second paragraph.");
   });
 
+  it("converts markdown image syntax into image nodes", () => {
+    const doc = replaceWithPlainText("Lead paragraph.\n\n![Campus scene](https://example.com/cover.png)\n\nClosing note.");
+
+    assert.deepEqual(doc, {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Lead paragraph." }] },
+        { type: "image", attrs: { src: "https://example.com/cover.png", alt: "Campus scene" } },
+        { type: "paragraph", content: [{ type: "text", text: "Closing note." }] },
+      ],
+    });
+  });
+
   it("represents empty documents without empty text nodes", () => {
     const doc = replaceWithPlainText("");
 

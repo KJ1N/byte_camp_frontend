@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ConflictException, NotFoundException } from "@nestjs/common";
-import { DraftMode, DraftStatus, type RichTextDocument } from "@bytecamp-aigc/shared";
+import { ArticleStatus, DraftMode, DraftStatus, type RichTextDocument } from "@bytecamp-aigc/shared";
 import { DraftsService } from "./drafts.service";
 
 const currentBody: RichTextDocument = {
@@ -45,6 +45,7 @@ function createService(options: { draft?: ReturnType<typeof createDraft> | null;
   const calls = {
     draftUpdates: [] as Array<{ title: string; body: RichTextDocument; version: { increment: number } }>,
     versionCreates: [] as Array<{ draftId: string; title: string; snapshot: RichTextDocument; version: number }>,
+    draftDeletes: [] as string[],
   };
 
   const tx = {
@@ -64,6 +65,10 @@ function createService(options: { draft?: ReturnType<typeof createDraft> | null;
           version: (draft?.version ?? 0) + data.version.increment,
           updatedAt: new Date("2026-06-04T10:20:00.000Z"),
         };
+      },
+      delete: async ({ where }: { where: { id: string } }) => {
+        calls.draftDeletes.push(where.id);
+        return draft;
       },
     },
     draftVersion: {
@@ -143,5 +148,69 @@ describe("DraftsService.restoreVersion", () => {
       () => service.restoreVersion("user-1", "draft-1", { versionId: "version-2" }),
       ConflictException,
     );
+  });
+});
+
+function createDeleteService(
+  options: {
+    draft?: ReturnType<typeof createDraft> | null;
+    articles?: Array<{ id: string; status: ArticleStatus }>;
+  } = {},
+) {
+  const draft = options.draft === undefined ? createDraft() : options.draft;
+  const articles = options.articles ?? [];
+  const calls = {
+    draftDeletes: [] as string[],
+    removedArticles: [] as string[],
+  };
+
+  const prisma = {
+    draft: {
+      findFirst: async () => draft,
+      delete: async ({ where }: { where: { id: string } }) => {
+        calls.draftDeletes.push(where.id);
+        return draft;
+      },
+    },
+    article: {
+      findMany: async () => articles,
+    },
+  };
+
+  return {
+    service: new DraftsService(prisma as never, {
+      removeArticle: async (articleId: string) => {
+        calls.removedArticles.push(articleId);
+        return true;
+      },
+    } as never),
+    calls,
+  };
+}
+
+describe("DraftsService.deleteDraft", () => {
+  it("deletes an owned draft and removes linked published articles from rankings", async () => {
+    const { service, calls } = createDeleteService({
+      articles: [
+        { id: "article-1", status: ArticleStatus.Published },
+        { id: "article-2", status: ArticleStatus.Withdrawn },
+      ],
+    });
+
+    const result = await service.deleteDraft("user-1", "draft-1");
+
+    assert.deepEqual(result, {
+      draftId: "draft-1",
+      deletedArticleIds: ["article-1", "article-2"],
+      message: "Draft deleted successfully.",
+    });
+    assert.deepEqual(calls.draftDeletes, ["draft-1"]);
+    assert.deepEqual(calls.removedArticles, ["article-1"]);
+  });
+
+  it("rejects deleting another user's draft", async () => {
+    const { service } = createDeleteService({ draft: null });
+
+    await assert.rejects(() => service.deleteDraft("user-2", "draft-1"), NotFoundException);
   });
 });
