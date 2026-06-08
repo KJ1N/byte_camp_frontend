@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { RichTextDocument } from "@bytecamp-aigc/shared";
 
 import {
+  appendDocumentAttachment,
   appendPlainTextParagraph,
   normalizeRichTextDocument,
   plainTextFromRichText,
@@ -90,6 +91,38 @@ describe("rich text document helpers", () => {
     };
 
     assert.equal(appendPlainTextParagraph(current, "   "), current);
+  });
+
+  it("appends a document attachment as a linked blockquote card", () => {
+    const current: RichTextDocument = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "Existing" }] }],
+    };
+
+    const next = appendDocumentAttachment(current, {
+      name: "brief.md",
+      url: "https://cdn.example.com/brief.md",
+      sizeLabel: "2.0 KB",
+    });
+
+    assert.deepEqual(next.content[1], {
+      type: "blockquote",
+      attrs: { assetAttachment: true, href: "https://cdn.example.com/brief.md" },
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "附件：" },
+            {
+              type: "text",
+              text: "brief.md",
+              marks: [{ type: "link", attrs: { href: "https://cdn.example.com/brief.md" } }],
+            },
+            { type: "text", text: "（2.0 KB）" },
+          ],
+        },
+      ],
+    });
   });
 
   it("extracts text from nested rich text nodes", () => {

@@ -7,7 +7,7 @@ import {
 
 export type CreatorContentFilter = "all" | "draft" | "published" | "withdrawn";
 
-export type CreatorContentActionKind = "view" | "edit" | "publish" | "withdraw";
+export type CreatorContentActionKind = "view" | "edit" | "publish" | "withdraw" | "delete";
 
 export interface CreatorContentAction {
   kind: CreatorContentActionKind;
@@ -68,12 +68,14 @@ export function getCreatorContentActions(content: CreatorContentItem): CreatorCo
       { kind: "view", label: "查看详情" },
       { kind: "edit", label: "继续编辑" },
       { kind: "withdraw", label: "撤回" },
+      { kind: "delete", label: "删除" },
     ];
   }
 
   return [
     { kind: "edit", label: "继续编辑" },
     { kind: "publish", label: content.status === CreatorContentStatus.Withdrawn ? "重新发布" : "去发布" },
+    { kind: "delete", label: "删除" },
   ];
 }
 

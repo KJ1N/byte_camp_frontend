@@ -8,6 +8,7 @@ import type {
   CreatorInspiration,
   CreatorInspirationsResponse,
   CreatorOverviewResponse,
+  DeleteDraftResponse,
   WithdrawArticleResponse,
 } from "@bytecamp-aigc/shared";
 
@@ -63,8 +64,11 @@ export default function CreatorHomePage() {
   const [overviewError, setOverviewError] = useState("");
   const [inspirationError, setInspirationError] = useState("");
   const [withdrawError, setWithdrawError] = useState("");
+  const [deleteError, setDeleteError] = useState("");
   const [pendingWithdrawArticleId, setPendingWithdrawArticleId] = useState("");
+  const [pendingDeleteDraftId, setPendingDeleteDraftId] = useState("");
   const [withdrawingArticleId, setWithdrawingArticleId] = useState("");
+  const [deletingDraftId, setDeletingDraftId] = useState("");
   const [managementOpen, setManagementOpen] = useState(true);
 
   useEffect(() => {
@@ -140,8 +144,11 @@ export default function CreatorHomePage() {
     setOverviewError("");
     setInspirationError("");
     setWithdrawError("");
+    setDeleteError("");
     setPendingWithdrawArticleId("");
+    setPendingDeleteDraftId("");
     setWithdrawingArticleId("");
+    setDeletingDraftId("");
   }
 
   async function withdrawArticle(articleId: string) {
@@ -172,6 +179,37 @@ export default function CreatorHomePage() {
     }
 
     setPendingWithdrawArticleId("");
+    await loadCreatorData(token);
+  }
+
+  async function deleteContent(draftId: string) {
+    if (!token) return;
+
+    setDeleteError("");
+    setDeletingDraftId(draftId);
+
+    const response = await apiFetch(`/drafts/${draftId}`, {
+      authToken: token,
+      method: "DELETE",
+    });
+    const payload = await readApiJson<DeleteDraftResponse | { message?: string | string[] }>(response);
+
+    setDeletingDraftId("");
+
+    if (response.status === 401) {
+      clearAuthSession();
+      setToken(null);
+      setUser(null);
+      setOverview(null);
+      return;
+    }
+
+    if (!response.ok) {
+      setDeleteError(getApiErrorMessage(payload, "删除失败，请稍后重试。"));
+      return;
+    }
+
+    setPendingDeleteDraftId("");
     await loadCreatorData(token);
   }
 
@@ -349,13 +387,19 @@ export default function CreatorHomePage() {
 
             <ContentPanel
               contents={filteredContents}
+              deleteError={deleteError}
+              deletingDraftId={deletingDraftId}
               filter={contentFilter}
+              pendingDeleteDraftId={pendingDeleteDraftId}
               pendingWithdrawArticleId={pendingWithdrawArticleId}
               visible={activeSection === "contents" || activeSection === "overview"}
               withdrawError={withdrawError}
               withdrawingArticleId={withdrawingArticleId}
+              onCancelDelete={() => setPendingDeleteDraftId("")}
               onCancelWithdraw={() => setPendingWithdrawArticleId("")}
+              onDelete={(draftId) => void deleteContent(draftId)}
               onFilterChange={setContentFilter}
+              onRequestDelete={setPendingDeleteDraftId}
               onRequestWithdraw={setPendingWithdrawArticleId}
               onWithdraw={(articleId) => void withdrawArticle(articleId)}
             />
@@ -425,24 +469,36 @@ const contentFilters: Array<{ id: CreatorContentFilter; label: string }> = [
 
 function ContentPanel({
   contents,
+  deleteError,
+  deletingDraftId,
   filter,
+  pendingDeleteDraftId,
   pendingWithdrawArticleId,
   visible,
   withdrawError,
   withdrawingArticleId,
+  onCancelDelete,
   onCancelWithdraw,
+  onDelete,
   onFilterChange,
+  onRequestDelete,
   onRequestWithdraw,
   onWithdraw,
 }: {
   contents: CreatorContentItem[];
+  deleteError: string;
+  deletingDraftId: string;
   filter: CreatorContentFilter;
+  pendingDeleteDraftId: string;
   pendingWithdrawArticleId: string;
   visible: boolean;
   withdrawError: string;
   withdrawingArticleId: string;
+  onCancelDelete: () => void;
   onCancelWithdraw: () => void;
+  onDelete: (draftId: string) => void;
   onFilterChange: (filter: CreatorContentFilter) => void;
+  onRequestDelete: (draftId: string) => void;
   onRequestWithdraw: (articleId: string) => void;
   onWithdraw: (articleId: string) => void;
 }) {
@@ -481,6 +537,12 @@ function ContentPanel({
       {withdrawError ? (
         <div className="mb-4 rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-4 py-3 text-sm text-[#d92d2d]" role="alert">
           {withdrawError}
+        </div>
+      ) : null}
+
+      {deleteError ? (
+        <div className="mb-4 rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-4 py-3 text-sm text-[#d92d2d]" role="alert">
+          {deleteError}
         </div>
       ) : null}
 
@@ -541,7 +603,7 @@ function ContentPanel({
                   ) : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">
-                  {getCreatorContentActions(content).map((action) => {
+                  {getCreatorContentActions(content).filter((action) => action.kind !== "delete").map((action) => {
                     if (action.kind === "view" && content.articleId) {
                       return (
                         <Link
@@ -594,6 +656,43 @@ function ContentPanel({
                     return null;
                   })}
                 </div>
+              </div>
+              <div className="mt-4 flex justify-end">
+                {pendingDeleteDraftId && pendingDeleteDraftId === content.draftId ? (
+                  <div className="w-full rounded-md border border-[#ffd4d4] bg-white px-3 py-3 text-sm text-[#4e5661] sm:w-auto">
+                    <div>
+                      {content.articleId
+                        ? "删除后会移除关联文章和草稿，读者将无法继续访问，确认删除？"
+                        : "删除后草稿不可恢复，确认删除？"}
+                    </div>
+                    <div className="mt-3 flex flex-wrap justify-end gap-2">
+                      <button
+                        className="rounded-md bg-[#d92d2d] px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={deletingDraftId === content.draftId}
+                        type="button"
+                        onClick={() => content.draftId && onDelete(content.draftId)}
+                      >
+                        {deletingDraftId === content.draftId ? "删除中..." : "确认删除"}
+                      </button>
+                      <button
+                        className="rounded-md border border-[#dedede] px-3 py-2 text-sm font-semibold text-[#4e5661] hover:bg-[#f6f7f9]"
+                        type="button"
+                        onClick={onCancelDelete}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    className="rounded-md border border-[#ffd4d4] px-3 py-2 text-sm font-semibold text-[#d92d2d] hover:bg-[#fff6f6] disabled:opacity-50"
+                    disabled={!content.draftId || deletingDraftId === content.draftId}
+                    type="button"
+                    onClick={() => content.draftId && onRequestDelete(content.draftId)}
+                  >
+                    删除文章
+                  </button>
+                )}
               </div>
             </article>
           ))}

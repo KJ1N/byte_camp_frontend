@@ -1,7 +1,17 @@
-import { AssetAuditStatus, AssetKind, type AssetSummary } from "@bytecamp-aigc/shared";
+import {
+  AssetAuditStatus,
+  AssetFolderKind,
+  AssetKind,
+  type AssetFolderSummary,
+  type AssetSummary,
+} from "@bytecamp-aigc/shared";
 
 const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-const documentMimeTypes = new Set(["text/plain", "text/markdown", "application/pdf"]);
+const documentMimeTypes = new Set([
+  "text/plain",
+  "text/markdown",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
 const imageSizeLimit = 5 * 1024 * 1024;
 const documentSizeLimit = 10 * 1024 * 1024;
 
@@ -41,4 +51,16 @@ export function getAssetAuditTone(status: AssetAuditStatus): "safe" | "warn" | "
 
 export function canInsertAssetIntoEditor(asset: AssetSummary): boolean {
   return asset.kind === AssetKind.Image && asset.auditStatus !== AssetAuditStatus.Blocked;
+}
+
+export function canInsertDocumentAttachment(asset: AssetSummary): boolean {
+  return asset.kind === AssetKind.Document && asset.auditStatus !== AssetAuditStatus.Blocked;
+}
+
+export function filterAssetFoldersByKind(folders: AssetFolderSummary[], kind: AssetFolderKind): AssetFolderSummary[] {
+  return folders.filter((folder) => folder.kind === kind);
+}
+
+export function getDefaultAssetFolderId(folders: AssetFolderSummary[], kind: AssetFolderKind): string {
+  return filterAssetFoldersByKind(folders, kind)[0]?.id ?? "";
 }

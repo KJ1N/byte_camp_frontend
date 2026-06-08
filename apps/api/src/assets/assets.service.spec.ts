@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
-import { AssetAuditStatus, AssetKind } from "@bytecamp-aigc/shared";
+import { AssetAuditStatus, AssetFolderKind, AssetKind } from "@bytecamp-aigc/shared";
 import type { AssetAuditService } from "./asset-audit.service";
 import { AssetsService, type UploadedAssetFile } from "./assets.service";
 import type { CloudStorageService } from "./cloud-storage.service";
@@ -25,10 +25,61 @@ function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: st
     objectUrls: [] as string[],
   };
   const assets = new Map<string, any>();
+  const folders = new Map<string, any>();
   const auditDecision = options.auditDecision ?? AssetAuditStatus.Passed;
   const ownerId = options.ownerId ?? "user-1";
+  const imageFolder = {
+    id: "folder-image",
+    authorId: ownerId,
+    kind: AssetFolderKind.Image,
+    name: "默认图片",
+    createdAt: new Date("2026-06-07T09:00:00.000Z"),
+    updatedAt: new Date("2026-06-07T09:00:00.000Z"),
+  };
+  const documentFolder = {
+    id: "folder-document",
+    authorId: ownerId,
+    kind: AssetFolderKind.Document,
+    name: "默认资料",
+    createdAt: new Date("2026-06-07T09:00:00.000Z"),
+    updatedAt: new Date("2026-06-07T09:00:00.000Z"),
+  };
+  folders.set(imageFolder.id, imageFolder);
+  folders.set(documentFolder.id, documentFolder);
 
   const prisma = {
+    assetFolder: {
+      create: async ({ data }: { data: any }) => {
+        const folder = {
+          id: `folder-${folders.size + 1}`,
+          createdAt: new Date("2026-06-07T09:00:00.000Z"),
+          updatedAt: new Date("2026-06-07T09:00:00.000Z"),
+          ...data,
+        };
+        folders.set(folder.id, folder);
+        return folder;
+      },
+      findMany: async ({ where }: { where: { authorId: string } }) =>
+        [...folders.values()].filter((folder) => folder.authorId === where.authorId),
+      findFirst: async ({ where }: { where: { id?: string; authorId: string; kind?: string } }) =>
+        [...folders.values()].find(
+          (folder) =>
+            (where.id === undefined || folder.id === where.id) &&
+            folder.authorId === where.authorId &&
+            (where.kind === undefined || folder.kind === where.kind),
+        ) ?? null,
+      update: async ({ where, data }: { where: { id: string }; data: any }) => {
+        const folder = folders.get(where.id);
+        const updated = { ...folder, ...data, updatedAt: new Date("2026-06-07T09:30:00.000Z") };
+        folders.set(where.id, updated);
+        return updated;
+      },
+      delete: async ({ where }: { where: { id: string } }) => {
+        const folder = folders.get(where.id);
+        folders.delete(where.id);
+        return folder;
+      },
+    },
     asset: {
       create: async ({ data }: { data: any }) => {
         const asset = {
@@ -40,9 +91,13 @@ function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: st
         calls.createdAssets.push(data);
         return asset;
       },
-      findMany: async ({ where }: { where: { authorId: string } }) =>
-        [...assets.values()].filter((asset) => asset.authorId === where.authorId),
+      findMany: async ({ where }: { where: { authorId: string; folderId?: string } }) =>
+        [...assets.values()].filter(
+          (asset) => asset.authorId === where.authorId && (where.folderId === undefined || asset.folderId === where.folderId),
+        ),
       findUnique: async ({ where }: { where: { id: string } }) => assets.get(where.id) ?? null,
+      count: async ({ where }: { where: { folderId: string } }) =>
+        [...assets.values()].filter((asset) => asset.folderId === where.folderId).length,
       delete: async ({ where }: { where: { id: string } }) => {
         const asset = assets.get(where.id);
         assets.delete(where.id);
@@ -86,17 +141,42 @@ function createService(options: { auditDecision?: AssetAuditStatus; ownerId?: st
     ),
     calls,
     assets,
+    folders,
+    imageFolderId: imageFolder.id,
+    documentFolderId: documentFolder.id,
     ownerId,
   };
 }
 
 describe("AssetsService", () => {
-  it("uploads a passed image to cloud storage and returns a CDN URL", async () => {
-    const { service, calls } = createService();
+  it("creates, lists, renames, and deletes owned asset folders", async () => {
+    const { service } = createService();
 
-    const result = await service.uploadAsset("user-1", createFile());
+    const created = await service.createFolder("user-1", { name: "选题截图", kind: AssetFolderKind.Image });
+    const renamed = await service.renameFolder("user-1", created.folder.id, { name: "封面图片" });
+    const listed = await service.listFolders("user-1");
+    const deleted = await service.deleteFolder("user-1", created.folder.id);
+
+    assert.equal(created.folder.kind, AssetFolderKind.Image);
+    assert.equal(renamed.folder.name, "封面图片");
+    assert.deepEqual(listed.items.map((folder) => folder.name), ["默认图片", "默认资料", "封面图片"]);
+    assert.equal(deleted.folderId, created.folder.id);
+  });
+
+  it("rejects deleting a non-empty asset folder", async () => {
+    const { service, imageFolderId } = createService();
+    await service.uploadAsset("user-1", createFile(), imageFolderId);
+
+    await assert.rejects(() => service.deleteFolder("user-1", imageFolderId), BadRequestException);
+  });
+
+  it("uploads a passed image to cloud storage and returns a CDN URL", async () => {
+    const { service, calls, imageFolderId } = createService();
+
+    const result = await service.uploadAsset("user-1", createFile(), imageFolderId);
 
     assert.equal(result.asset.kind, AssetKind.Image);
+    assert.equal(result.asset.folderId, imageFolderId);
     assert.equal(result.asset.auditStatus, AssetAuditStatus.Passed);
     assert.equal(result.asset.url, `https://cdn.example.com/assets/user-1/${result.asset.id}.png`);
     assert.equal(result.asset.metadata.storageKey, `assets/user-1/${result.asset.id}.png`);
@@ -106,17 +186,17 @@ describe("AssetsService", () => {
   });
 
   it("decodes UTF-8 filenames that multipart parsers expose as latin1 text", async () => {
-    const { service, calls } = createService();
+    const { service, calls, imageFolderId } = createService();
     const garbledName = Buffer.from("头图.jpg", "utf8").toString("latin1");
 
-    const result = await service.uploadAsset("user-1", createFile({ originalname: garbledName }));
+    const result = await service.uploadAsset("user-1", createFile({ originalname: garbledName }), imageFolderId);
 
     assert.equal(result.asset.metadata.originalName, "头图.jpg");
     assert.equal(calls.auditInputs[0].filename, "头图.jpg");
   });
 
-  it("uploads a document without visual audit and keeps it non-insertable for the editor", async () => {
-    const { service, calls } = createService();
+  it("extracts and audits a markdown document before cloud upload", async () => {
+    const { service, calls, documentFolderId } = createService();
 
     const result = await service.uploadAsset(
       "user-1",
@@ -126,56 +206,139 @@ describe("AssetsService", () => {
         size: 8_000,
         buffer: Buffer.from("# brief"),
       }),
+      documentFolderId,
     );
 
     assert.equal(result.asset.kind, AssetKind.Document);
+    assert.equal(result.asset.folderId, documentFolderId);
     assert.equal(result.asset.auditStatus, AssetAuditStatus.Passed);
     assert.equal(result.asset.url, `https://cdn.example.com/assets/user-1/${result.asset.id}.md`);
+    assert.equal(result.asset.metadata.textContent, "# brief");
+    assert.equal(result.asset.metadata.textPreview, "# brief");
     assert.equal(calls.auditInputs.length, 0);
   });
 
-  it("keeps WARN images usable but records the warning audit status", async () => {
-    const { service } = createService({ auditDecision: AssetAuditStatus.Warn });
+  it("extracts text from a docx document before cloud upload", async () => {
+    const { service, documentFolderId } = createService();
 
-    const result = await service.uploadAsset("user-1", createFile({ originalname: "warn-cover.png" }));
+    const result = await service.uploadAsset(
+      "user-1",
+      createFile({
+        originalname: "brief.docx",
+        mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size: 4_000,
+        buffer: createDocxBuffer("第一段资料\n第二段资料"),
+      }),
+      documentFolderId,
+    );
+
+    assert.equal(result.asset.kind, AssetKind.Document);
+    assert.equal(result.asset.metadata.textContent, "第一段资料\n第二段资料");
+  });
+
+  it("blocks risky document text before cloud upload and persistence", async () => {
+    const { service, calls, documentFolderId } = createService();
+
+    await assert.rejects(
+      () =>
+        service.uploadAsset(
+          "user-1",
+          createFile({
+            originalname: "brief.txt",
+            mimetype: "text/plain",
+            size: 64,
+            buffer: Buffer.from("这份资料包含赌博引流话术"),
+          }),
+          documentFolderId,
+        ),
+      BadRequestException,
+    );
+
+    assert.equal(calls.uploads.length, 0);
+    assert.equal(calls.createdAssets.length, 0);
+  });
+
+  it("requires uploads to target an owned folder of the matching asset kind", async () => {
+    const { service, imageFolderId, documentFolderId } = createService();
+
+    await assert.rejects(() => service.uploadAsset("user-1", createFile(), undefined), BadRequestException);
+    await assert.rejects(() => service.uploadAsset("user-2", createFile(), imageFolderId), BadRequestException);
+    await assert.rejects(
+      () =>
+        service.uploadAsset(
+          "user-1",
+          createFile({
+            originalname: "brief.md",
+            mimetype: "text/markdown",
+            size: 8_000,
+            buffer: Buffer.from("# brief"),
+          }),
+          imageFolderId,
+        ),
+      BadRequestException,
+    );
+    await assert.rejects(() => service.uploadAsset("user-1", createFile(), documentFolderId), BadRequestException);
+  });
+
+  it("keeps WARN images usable but records the warning audit status", async () => {
+    const { service, imageFolderId } = createService({ auditDecision: AssetAuditStatus.Warn });
+
+    const result = await service.uploadAsset("user-1", createFile({ originalname: "warn-cover.png" }), imageFolderId);
 
     assert.equal(result.asset.auditStatus, AssetAuditStatus.Warn);
     assert.equal(result.asset.metadata.audit.summary, "视觉审核通过");
   });
 
   it("blocks high-risk images before cloud upload and persistence", async () => {
-    const { service, calls } = createService({ auditDecision: AssetAuditStatus.Blocked });
+    const { service, calls, imageFolderId } = createService({ auditDecision: AssetAuditStatus.Blocked });
 
-    await assert.rejects(() => service.uploadAsset("user-1", createFile({ originalname: "block-cover.png" })), BadRequestException);
+    await assert.rejects(
+      () => service.uploadAsset("user-1", createFile({ originalname: "block-cover.png" }), imageFolderId),
+      BadRequestException,
+    );
 
     assert.equal(calls.uploads.length, 0);
     assert.equal(calls.createdAssets.length, 0);
   });
 
   it("rejects unsupported MIME types and oversized files", async () => {
-    const { service } = createService();
+    const { service, imageFolderId, documentFolderId } = createService();
 
-    await assert.rejects(() => service.uploadAsset("user-1", createFile({ mimetype: "application/zip" })), BadRequestException);
-    await assert.rejects(() => service.uploadAsset("user-1", createFile({ size: 6 * 1024 * 1024 })), BadRequestException);
+    await assert.rejects(
+      () => service.uploadAsset("user-1", createFile({ mimetype: "application/zip" }), imageFolderId),
+      BadRequestException,
+    );
+    await assert.rejects(() => service.uploadAsset("user-1", createFile({ size: 6 * 1024 * 1024 }), imageFolderId), BadRequestException);
     await assert.rejects(
       () =>
         service.uploadAsset(
           "user-1",
           createFile({ originalname: "large.md", mimetype: "text/markdown", size: 11 * 1024 * 1024 }),
+          documentFolderId,
+        ),
+      BadRequestException,
+    );
+    await assert.rejects(
+      () =>
+        service.uploadAsset(
+          "user-1",
+          createFile({ originalname: "legacy.pdf", mimetype: "application/pdf", size: 1024 }),
+          documentFolderId,
         ),
       BadRequestException,
     );
   });
 
   it("lists only the current user's assets", async () => {
-    const { service } = createService();
+    const { service, imageFolderId } = createService();
 
-    await service.uploadAsset("user-1", createFile());
-    await service.uploadAsset("user-2", createFile({ originalname: "other.png" }));
+    await service.uploadAsset("user-1", createFile(), imageFolderId);
 
     const result = await service.listMine("user-1");
+    const folderResult = await service.listMine("user-1", imageFolderId);
 
     assert.equal(result.items.length, 1);
+    assert.equal(folderResult.items.length, 1);
     assert.equal(result.items[0].metadata.originalName, "cover.png");
   });
 
@@ -186,6 +349,7 @@ describe("AssetsService", () => {
       id: "asset-legacy",
       authorId: "user-1",
       filename: "asset-legacy.jpg",
+      folderId: "folder-image",
       mimeType: "image/jpeg",
       url: "https://cdn.example.com/assets/user-1/asset-legacy.jpg",
       auditStatus: AssetAuditStatus.Passed,
@@ -218,6 +382,7 @@ describe("AssetsService", () => {
       id: "asset-legacy",
       authorId: "user-1",
       filename: "asset-legacy.jpg",
+      folderId: "folder-image",
       mimeType: "image/jpeg",
       url: "https://cdn.example.com/assets/user-1/asset-legacy.jpg",
       auditStatus: AssetAuditStatus.Passed,
@@ -246,8 +411,8 @@ describe("AssetsService", () => {
   });
 
   it("deletes only owned assets and removes the cloud object", async () => {
-    const { service, calls } = createService();
-    const uploaded = await service.uploadAsset("user-1", createFile());
+    const { service, calls, imageFolderId } = createService();
+    const uploaded = await service.uploadAsset("user-1", createFile(), imageFolderId);
 
     await assert.rejects(() => service.deleteAsset("user-2", uploaded.asset.id), ForbiddenException);
 
@@ -257,3 +422,26 @@ describe("AssetsService", () => {
     assert.deepEqual(calls.deletes, [`assets/user-1/${uploaded.asset.id}.png`]);
   });
 });
+
+function createDocxBuffer(text: string): Buffer {
+  const escaped = text
+    .split("\n")
+    .map((line) => `<w:p><w:r><w:t>${line}</w:t></w:r></w:p>`)
+    .join("");
+  const xml = Buffer.from(
+    `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${escaped}</w:body></w:document>`,
+  );
+  const filename = Buffer.from("word/document.xml");
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt16LE(20, 4);
+  header.writeUInt16LE(0, 6);
+  header.writeUInt16LE(0, 8);
+  header.writeUInt32LE(0, 10);
+  header.writeUInt32LE(0, 14);
+  header.writeUInt32LE(xml.length, 18);
+  header.writeUInt32LE(xml.length, 22);
+  header.writeUInt16LE(filename.length, 26);
+  header.writeUInt16LE(0, 28);
+  return Buffer.concat([header, filename, xml]);
+}

@@ -7,6 +7,7 @@ import type { ArticleListItem, CursorPageResponse } from "@bytecamp-aigc/shared"
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredUser, type AuthUser } from "@/lib/auth";
 import { markArticleViewIntent } from "@/lib/engagement-state";
+import { getRankingGuidance, type RankingGuidanceKind } from "@/lib/ranking-guidance";
 
 type PageState = "loading" | "ready" | "empty" | "error";
 
@@ -193,8 +194,8 @@ export default function ContentHomePage() {
         </div>
 
         <aside id="rankings" className="space-y-5">
-          <RankingPanel href="/rankings?tab=hot" items={hotRankings} title="热点榜" />
-          <RankingPanel href="/rankings?tab=top" items={topRankings} title="爆文榜" />
+          <RankingPanel href="/rankings?tab=hot" items={hotRankings} kind="hot" title="热点榜" />
+          <RankingPanel href="/rankings?tab=top" items={topRankings} kind="top" title="爆文榜" />
 
           <div className="bg-white px-5 py-5">
             <h2 className="text-lg font-semibold">创作者入口</h2>
@@ -257,7 +258,9 @@ function ArticleRow({ article }: { article: ArticleListItem }) {
   );
 }
 
-function RankingPanel({ href, items, title }: { href: string; items: ArticleListItem[]; title: string }) {
+function RankingPanel({ href, items, kind, title }: { href: string; items: ArticleListItem[]; kind: RankingGuidanceKind; title: string }) {
+  const guidance = getRankingGuidance(kind);
+
   return (
     <div className="bg-white px-5 py-5">
       <div className="mb-4 flex items-center justify-between">
@@ -265,6 +268,11 @@ function RankingPanel({ href, items, title }: { href: string; items: ArticleList
         <Link className="text-xs text-[#8f959e] hover:text-[#ff4d4f]" href={href}>
           查看全部
         </Link>
+      </div>
+      <div className="mb-4 rounded-md border border-[#eeeeee] bg-[#fafafa] px-3 py-3">
+        <div className="text-xs font-semibold text-[#4e5661]">{guidance.title}</div>
+        <p className="mt-2 text-xs leading-5 text-[#6b7280]">{guidance.algorithm}</p>
+        <p className="mt-2 text-xs leading-5 text-[#8f959e]">创作者指引：{guidance.creatorTip}</p>
       </div>
       <div className="grid gap-3">
         {items.length ? (

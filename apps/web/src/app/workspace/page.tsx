@@ -21,10 +21,12 @@ import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { createAiSseParser, mergeTitleCandidate } from "@/lib/ai-stream";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
 import {
+  appendDocumentAttachment,
   appendPlainTextParagraph,
   plainTextFromRichText,
   replaceWithPlainText,
 } from "@/lib/rich-text-document";
+import { formatAssetSize } from "@/lib/assets";
 import { nextSelectedPromptIdAfterDelete } from "@/lib/prompt-management";
 import { buildWorkspaceGeneratedBody } from "@/lib/workspace-generated-body";
 import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
@@ -389,6 +391,27 @@ export default function WorkspacePage() {
     setError("");
     setGenerated((current) => current ?? createEmptyGenerated());
     setImageInsertRequest(createWorkspaceImageInsertRequest(asset));
+  }
+
+  function insertAssetDocumentAttachment(asset: AssetSummary) {
+    setError("");
+    setGenerated((current) => {
+      const base = current ?? createEmptyGenerated();
+      const body = appendDocumentAttachment(base.body, {
+        name: asset.metadata.originalName || asset.filename,
+        url: asset.url,
+        sizeLabel: formatAssetSize(asset.metadata.size),
+      });
+      return {
+        ...base,
+        body,
+        bodyText: plainTextFromRichText(body),
+      };
+    });
+  }
+
+  function insertAssetDocumentText(text: string) {
+    appendGeneratedBody(text);
   }
 
   async function saveDraft() {
@@ -810,7 +833,12 @@ export default function WorkspacePage() {
           </div>
 
           {sidePanelTab === "assets" ? (
-            <AssetPanel authToken={token} onInsertImage={insertAssetImage} />
+            <AssetPanel
+              authToken={token}
+              onInsertDocumentAttachment={insertAssetDocumentAttachment}
+              onInsertDocumentText={insertAssetDocumentText}
+              onInsertImage={insertAssetImage}
+            />
           ) : (
             <AiWritingAssistant
               authToken={token}

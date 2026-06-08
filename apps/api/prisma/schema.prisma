@@ -47,6 +47,7 @@ model User {
   drafts   Draft[]
   prompts  Prompt[]
   assets   Asset[]
+  assetFolders AssetFolder[]
   articles Article[]
 
   @@map("users")
@@ -114,6 +115,7 @@ model Prompt {
 model Asset {
   id          String   @id @default(cuid())
   authorId    String
+  folderId    String?
   filename    String
   mimeType    String
   url         String
@@ -122,9 +124,27 @@ model Asset {
   createdAt   DateTime @default(now())
 
   author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  folder AssetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
   @@index([authorId])
+  @@index([folderId])
   @@map("assets")
+}
+
+model AssetFolder {
+  id        String   @id @default(cuid())
+  authorId  String
+  kind      String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  author User    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  assets Asset[]
+
+  @@index([authorId, kind])
+  @@unique([authorId, kind, name])
+  @@map("asset_folders")
 }
 
 model AuditRecord {
@@ -231,4 +251,3 @@ model RankingSnapshot {
   @@index([name, createdAt])
   @@map("ranking_snapshots")
 }
-

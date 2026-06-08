@@ -6,6 +6,7 @@ import type { ArticleListItem, CursorPageResponse } from "@bytecamp-aigc/shared"
 import { clearAuthSession, getStoredUser, type AuthUser } from "@/lib/auth";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { markArticleViewIntent } from "@/lib/engagement-state";
+import { getRankingGuidanceTitleBarCopy } from "@/lib/ranking-guidance";
 
 type RankingTab = "hot" | "top";
 type PageState = "loading" | "ready" | "empty" | "error";
@@ -83,6 +84,8 @@ export default function RankingsPage() {
     clearAuthSession();
     setUser(null);
   }
+
+  const guidanceCopy = getRankingGuidanceTitleBarCopy(tab);
   
   return (
     <main className="min-h-screen bg-[#f5f5f5] text-[#1f2329]">
@@ -134,6 +137,10 @@ export default function RankingsPage() {
               <div>
                 <p className="text-sm font-semibold text-[#ff4d4f]">内容分发</p>
                 <h1 className="mt-2 text-2xl font-semibold">{tabLabel(tab)}</h1>
+                <p className="mt-3 max-w-[720px] text-sm leading-6 text-[#5d6673]">
+                  <span className="font-semibold text-[#1f2329]">{guidanceCopy.label}：</span>
+                  {guidanceCopy.description}
+                </p>
               </div>
               <div className="flex rounded-md border border-[#dedede] bg-[#f8f9fb] p-1">
                 <button

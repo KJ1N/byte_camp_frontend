@@ -20,6 +20,40 @@ export function appendPlainTextParagraph(doc: RichTextDocument, text: string): R
   };
 }
 
+export function appendDocumentAttachment(
+  doc: RichTextDocument,
+  attachment: { name: string; url: string; sizeLabel: string },
+): RichTextDocument {
+  const name = attachment.name.trim();
+  const url = attachment.url.trim();
+  if (!name || !/^https?:\/\//i.test(url)) return doc;
+
+  return {
+    ...doc,
+    content: [
+      ...doc.content,
+      {
+        type: "blockquote",
+        attrs: { assetAttachment: true, href: url },
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "附件：" },
+              {
+                type: "text",
+                text: name,
+                marks: [{ type: "link", attrs: { href: url } }],
+              },
+              { type: "text", text: `（${attachment.sizeLabel}）` },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 export function normalizeRichTextDocument(doc: RichTextDocument): RichTextDocument {
   const content = doc.content
     .map((node) => normalizeRichTextNode(node))

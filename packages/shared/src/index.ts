@@ -287,6 +287,11 @@ export enum AssetKind {
   Document = "DOCUMENT",
 }
 
+export enum AssetFolderKind {
+  Image = "IMAGE",
+  Document = "DOCUMENT",
+}
+
 export enum AssetAuditStatus {
   Passed = "PASSED",
   Warn = "WARN",
@@ -306,6 +311,7 @@ export interface AssetAuditResult {
 export interface AssetSummary {
   id: string;
   kind: AssetKind;
+  folderId?: string | null;
   filename: string;
   mimeType: string;
   url: string;
@@ -315,8 +321,42 @@ export interface AssetSummary {
     size: number;
     storageKey: string;
     audit: AssetAuditResult;
+    textPreview?: string;
+    textContent?: string;
+    textSize?: number;
   };
   createdAt: string;
+}
+
+export interface AssetFolderSummary {
+  id: string;
+  kind: AssetFolderKind;
+  name: string;
+  assetCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateAssetFolderInput {
+  kind: AssetFolderKind;
+  name: string;
+}
+
+export interface RenameAssetFolderInput {
+  name: string;
+}
+
+export interface ListAssetFoldersResponse {
+  items: AssetFolderSummary[];
+}
+
+export interface AssetFolderMutationResponse {
+  folder: AssetFolderSummary;
+}
+
+export interface DeleteAssetFolderResponse {
+  folderId: string;
+  message: string;
 }
 
 export interface UploadAssetResponse {

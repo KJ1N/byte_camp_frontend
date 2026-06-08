@@ -77,13 +77,14 @@ describe("creator overview helpers", () => {
   it("returns content actions by lifecycle status", () => {
     const [draft, published, withdrawn] = createContents();
 
-    assert.deepEqual(getCreatorContentActions(draft).map((action) => action.kind), ["edit", "publish"]);
+    assert.deepEqual(getCreatorContentActions(draft).map((action) => action.kind), ["edit", "publish", "delete"]);
     assert.deepEqual(getCreatorContentActions(published).map((action) => action.kind), [
       "view",
       "edit",
       "withdraw",
+      "delete",
     ]);
-    assert.deepEqual(getCreatorContentActions(withdrawn).map((action) => action.kind), ["edit", "publish"]);
+    assert.deepEqual(getCreatorContentActions(withdrawn).map((action) => action.kind), ["edit", "publish", "delete"]);
   });
 
   it("sorts contents by update time without mutating the original list", () => {

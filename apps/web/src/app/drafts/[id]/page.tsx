@@ -17,6 +17,7 @@ import { AssetPanel } from "@/components/asset-panel";
 import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
+import { getDraftEditorOverlayPresentation } from "@/lib/editor-overlay-state";
 import {
   clearDraftOfflineState,
   createDraftOfflineState,
@@ -28,10 +29,12 @@ import {
   writeDraftOfflineState,
 } from "@/lib/draft-offline-state";
 import {
+  appendDocumentAttachment,
   appendPlainTextParagraph,
   plainTextFromRichText,
   replaceWithPlainText,
 } from "@/lib/rich-text-document";
+import { formatAssetSize } from "@/lib/assets";
 
 const emptyDoc: RichTextDocument = replaceWithPlainText("");
 
@@ -81,6 +84,7 @@ export default function DraftEditorPage() {
   const [restoreMessage, setRestoreMessage] = useState("");
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
   const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("ai");
+  const [assetLayerOpen, setAssetLayerOpen] = useState(false);
   const [imageInsertRequest, setImageInsertRequest] = useState<{
     id: string;
     src: string;
@@ -90,6 +94,7 @@ export default function DraftEditorPage() {
 
   const bodyText = useMemo(() => plainTextFromRichText(body), [body]);
   const wordCount = useMemo(() => bodyText.length, [bodyText]);
+  const overlayPresentation = useMemo(() => getDraftEditorOverlayPresentation(assetLayerOpen), [assetLayerOpen]);
   const hasLocalPending = hasRecovery || Boolean(offlineSnapshot);
   const canPublish = Boolean(
     draft &&
@@ -395,6 +400,22 @@ export default function DraftEditorPage() {
     setRestoreMessage("图片素材已插入正文，保存草稿后会同步到服务器。");
   }
 
+  function insertAssetDocumentAttachment(asset: AssetSummary) {
+    updateBody(
+      appendDocumentAttachment(body, {
+        name: asset.metadata.originalName || asset.filename,
+        url: asset.url,
+        sizeLabel: formatAssetSize(asset.metadata.size),
+      }),
+    );
+    setRestoreMessage("资料附件卡片已插入正文，保存草稿后会同步到服务器。");
+  }
+
+  function insertAssetDocumentText(text: string) {
+    appendDraftBody(text);
+    setRestoreMessage("选中的资料文本已插入正文，保存草稿后会同步到服务器。");
+  }
+
   function restoreOfflineDraft() {
     const payload = readDraftOfflineState(window.localStorage, draftId);
     if (!payload) return;
@@ -477,7 +498,11 @@ export default function DraftEditorPage() {
 
   return (
     <main className="min-h-screen bg-[#f5f5f5] text-[#1f2329]">
-      <header className="sticky top-0 z-20 border-b border-[#ededed] bg-white">
+      <header
+        aria-hidden={overlayPresentation.backgroundAriaHidden}
+        className={["sticky top-0 z-20 border-b border-[#ededed] bg-white", overlayPresentation.backgroundClassName].join(" ")}
+        style={overlayPresentation.backgroundStyle}
+      >
         <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-5">
           <div className="flex items-center gap-4">
             <Link
@@ -505,7 +530,14 @@ export default function DraftEditorPage() {
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-[1500px] gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div
+        aria-hidden={overlayPresentation.backgroundAriaHidden}
+        className={[
+          "mx-auto grid max-w-[1500px] gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_420px]",
+          overlayPresentation.backgroundClassName,
+        ].join(" ")}
+        style={overlayPresentation.backgroundStyle}
+      >
         <section className="min-h-[calc(100vh-8rem)] bg-white">
           {status === "loading" ? (
             <div className="px-8 py-16 text-center text-sm text-[#8f959e]">草稿加载中...</div>
@@ -752,7 +784,13 @@ export default function DraftEditorPage() {
           </div>
 
           {sidePanelTab === "assets" ? (
-            <AssetPanel authToken={token} onInsertImage={insertAssetImage} />
+            <AssetPanel
+              authToken={token}
+              onLayerOpenChange={setAssetLayerOpen}
+              onInsertDocumentAttachment={insertAssetDocumentAttachment}
+              onInsertDocumentText={insertAssetDocumentText}
+              onInsertImage={insertAssetImage}
+            />
           ) : (
             <AiWritingAssistant
               authToken={token}
