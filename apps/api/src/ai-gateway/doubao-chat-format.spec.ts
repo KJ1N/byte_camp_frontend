@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import {
   buildDoubaoChatCompletionsBody,
   getDoubaoChatCompletionsUrl,
+  parseDoubaoStreamEvent,
+  parseDoubaoStreamResult,
   parseDoubaoStreamText,
 } from "./doubao-chat-format";
 
@@ -70,5 +72,39 @@ describe("doubao chat format", () => {
     );
 
     assert.equal(content, "Hello world");
+  });
+
+  it("parses OpenAI-compatible usage fields from stream chunks", () => {
+    assert.deepEqual(
+      parseDoubaoStreamEvent(
+        'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}',
+      ),
+      {
+        tokenUsage: {
+          totalTokens: 12,
+          promptTokens: 7,
+          completionTokens: 5,
+        },
+      },
+    );
+  });
+
+  it("parses Doubao bot usage fields from stream chunks", () => {
+    const result = parseDoubaoStreamResult(
+      [
+        'data: {"choices":[{"delta":{"content":"正文","role":"assistant"},"index":0}]}',
+        'data: {"choices":[],"bot_usage":{"model_usage":[{"input_tokens":4,"output_tokens":8,"total_tokens":12}]}}',
+        "data: [DONE]",
+      ].join("\n\n"),
+    );
+
+    assert.deepEqual(result, {
+      content: "正文",
+      tokenUsage: {
+        totalTokens: 12,
+        promptTokens: 4,
+        completionTokens: 8,
+      },
+    });
   });
 });

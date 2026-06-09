@@ -175,4 +175,25 @@ describe("draft offline state helpers", () => {
 
     assert.equal(getDraftOfflineStatusText(state), "离线编辑内容已暂存到本地，恢复网络后会尝试同步。");
   });
+
+  it("supports local edit snapshots for immediate browser refresh recovery", () => {
+    const storage = createStorage();
+    const state = createDraftOfflineState({
+      draftId: "draft-1",
+      title: "刚输入的标题",
+      body,
+      baseVersion: 1,
+      serverUpdatedAt: "2026-06-07T10:00:00.000Z",
+      localUpdatedAt: "2026-06-07T10:02:00.000Z",
+      reason: "local_edit",
+    });
+
+    writeDraftOfflineState(storage, "draft-1", state);
+
+    assert.deepEqual(readDraftOfflineState(storage, "draft-1"), state);
+    assert.equal(
+      getDraftOfflineStatusText(state),
+      "编辑内容已实时保存到本地，停止输入后会自动同步到服务器。",
+    );
+  });
 });

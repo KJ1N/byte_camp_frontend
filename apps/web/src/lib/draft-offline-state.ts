@@ -1,6 +1,6 @@
 import type { RichTextDocument } from "@bytecamp-aigc/shared";
 
-export type DraftOfflineSaveReason = "offline" | "save_failed" | "sync_failed";
+export type DraftOfflineSaveReason = "local_edit" | "offline" | "save_failed" | "sync_failed";
 
 export interface DraftOfflineState {
   draftId: string;
@@ -69,6 +69,7 @@ export function isDraftOfflineConflict(
 }
 
 export function getDraftOfflineStatusText(state: DraftOfflineState) {
+  if (state.reason === "local_edit") return "编辑内容已实时保存到本地，停止输入后会自动同步到服务器。";
   if (state.reason === "offline") return "离线编辑内容已暂存到本地，恢复网络后会尝试同步。";
   if (state.reason === "sync_failed") return "本地内容同步失败，已继续保存在本地。";
   return "保存失败的内容已暂存到本地，可以稍后重试同步。";
@@ -101,5 +102,5 @@ function isRichTextDocument(value: unknown): value is RichTextDocument {
 }
 
 function isDraftOfflineSaveReason(value: unknown): value is DraftOfflineSaveReason {
-  return value === "offline" || value === "save_failed" || value === "sync_failed";
+  return value === "local_edit" || value === "offline" || value === "save_failed" || value === "sync_failed";
 }

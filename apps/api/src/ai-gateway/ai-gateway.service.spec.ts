@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { AuditDecision, RiskCategory } from "@bytecamp-aigc/shared";
 import { AiGatewayService } from "./ai-gateway.service";
+import type { AiRequestLogPayload } from "./ai-request-log";
 
 type ConfigValues = Record<string, string | undefined>;
 
@@ -31,19 +32,23 @@ function createPromptsService() {
   };
 }
 
-function createProvider(content: string) {
+function createProvider(content: string, tokenUsage?: AiRequestLogPayload["tokenUsage"]) {
   const calls: ProviderCall[] = [];
 
   return {
     calls,
     complete: async (input: ProviderCall) => {
       calls.push(input);
-      return { model: "live-model", content };
+      return { model: "live-model", content, ...(tokenUsage ? { tokenUsage } : {}) };
     },
   };
 }
 
-function createStreamingProvider(firstChunk: string, restContent: string) {
+function createStreamingProvider(
+  firstChunk: string,
+  restContent: string,
+  tokenUsage?: AiRequestLogPayload["tokenUsage"],
+) {
   const calls: ProviderCall[] = [];
   let releaseRest: (() => void) | undefined;
   const waitForRest = new Promise<void>((resolve) => {
@@ -61,6 +66,20 @@ function createStreamingProvider(firstChunk: string, restContent: string) {
       yield { model: "live-model", content: firstChunk };
       await waitForRest;
       yield { model: "live-model", content: restContent };
+      if (tokenUsage) {
+        yield { model: "live-model", content: "", tokenUsage };
+      }
+    },
+  };
+}
+
+function createRequestLogger() {
+  const logs: AiRequestLogPayload[] = [];
+
+  return {
+    logs,
+    log: (payload: AiRequestLogPayload) => {
+      logs.push(payload);
     },
   };
 }
@@ -82,14 +101,16 @@ const generationInput = {
 
 describe("AiGatewayService", () => {
   it("uses the live provider and parses structured article JSON", async () => {
+    const logger = createRequestLogger();
     const provider = createProvider(
       JSON.stringify({
         title: "How AI changes content creation",
         outline: ["Efficiency", "Workflow", "Risk control"],
         bodyText: "AI helps creators draft faster.\n\nCreators still edit and decide.",
       }),
+      { totalTokens: 42, promptTokens: 20, completionTokens: 22 },
     );
-    const service = new ServiceCtor(liveConfig, createPromptsService(), provider);
+    const service = new ServiceCtor(liveConfig, createPromptsService(), provider, logger);
 
     const response = await service.generateArticleDraft(generationInput);
 
@@ -102,6 +123,14 @@ describe("AiGatewayService", () => {
     assert.match(response.bodyText, /draft faster/);
     assert.equal(response.body.type, "doc");
     assert.equal(response.body.content.length, 2);
+    assert.equal(logger.logs.length, 1);
+    assert.equal(logger.logs[0].feature, "article_generation");
+    assert.equal(logger.logs[0].providerMode, "live");
+    assert.equal(logger.logs[0].model, "live-model");
+    assert.equal(logger.logs[0].status, "success");
+    assert.deepEqual(logger.logs[0].tokenUsage, { totalTokens: 42, promptTokens: 20, completionTokens: 22 });
+    assert.ok(logger.logs[0].requestId);
+    assert.ok(logger.logs[0].durationMs >= 0);
   });
 
   it("extracts JSON when the live provider wraps it in a markdown code block", async () => {
@@ -122,6 +151,7 @@ describe("AiGatewayService", () => {
   });
 
   it("falls back to mock output in auto mode when credentials are placeholders", async () => {
+    const logger = createRequestLogger();
     const provider = createProvider(
       JSON.stringify({
         title: "Should not call live provider",
@@ -137,6 +167,7 @@ describe("AiGatewayService", () => {
       }),
       createPromptsService(),
       provider,
+      logger,
     );
 
     const response = await service.generateArticleDraft(generationInput);
@@ -144,6 +175,10 @@ describe("AiGatewayService", () => {
     assert.equal(provider.calls.length, 0);
     assert.equal(response.model, "mock-model");
     assert.match(response.title, /AI writing/);
+    assert.equal(logger.logs.length, 1);
+    assert.equal(logger.logs[0].providerMode, "mock");
+    assert.equal(logger.logs[0].status, "success");
+    assert.deepEqual(logger.logs[0].tokenUsage, { totalTokens: null, promptTokens: null, completionTokens: null });
   });
 
   it("throws a service unavailable error when live mode is missing credentials", async () => {
@@ -166,7 +201,8 @@ describe("AiGatewayService", () => {
   });
 
   it("throws a bad gateway error when live provider output is not valid article JSON", async () => {
-    const service = new ServiceCtor(liveConfig, createPromptsService(), createProvider("not json"));
+    const logger = createRequestLogger();
+    const service = new ServiceCtor(liveConfig, createPromptsService(), createProvider("not json"), logger);
 
     await assert.rejects(
       () => service.generateArticleDraft(generationInput),
@@ -175,6 +211,9 @@ describe("AiGatewayService", () => {
         return true;
       },
     );
+    assert.equal(logger.logs.length, 1);
+    assert.equal(logger.logs[0].status, "error");
+    assert.match(logger.logs[0].errorCode ?? "", /AiProviderBadOutputException|BadGatewayException/);
   });
 
   it("uses the live provider for structured content audit", async () => {
@@ -356,11 +395,13 @@ describe("AiGatewayService", () => {
   });
 
   it("streams live article body deltas before the provider stream finishes", async () => {
+    const logger = createRequestLogger();
     const provider = createStreamingProvider(
       '{"title":"Live title","outline":["Intro"],"bodyText":"First ',
       'paragraph."}',
+      { totalTokens: 31, promptTokens: 14, completionTokens: 17 },
     );
-    const service = new ServiceCtor(liveConfig, createPromptsService(), provider);
+    const service = new ServiceCtor(liveConfig, createPromptsService(), provider, logger);
     const iterator = service.streamArticleDraft(generationInput, "user-1")[Symbol.asyncIterator]();
 
     assert.equal((await iterator.next()).value.event, "meta");
@@ -375,6 +416,11 @@ describe("AiGatewayService", () => {
     for await (const _event of iterator) {
       // drain the stream after releasing the provider remainder
     }
+    assert.equal(logger.logs.length, 1);
+    assert.equal(logger.logs[0].feature, "article_generation");
+    assert.equal(logger.logs[0].providerMode, "live");
+    assert.equal(logger.logs[0].status, "success");
+    assert.deepEqual(logger.logs[0].tokenUsage, { totalTokens: 31, promptTokens: 14, completionTokens: 17 });
   });
 
   it("streams live title candidates before the provider stream finishes", async () => {

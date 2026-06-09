@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { AiProviderClient, getProviderErrorDetail } from "./ai-provider.client";
+import { AiProviderClient, getProviderErrorDetail, type AiProviderTextDelta } from "./ai-provider.client";
 
 const ClientCtor = AiProviderClient as unknown as new (...args: unknown[]) => AiProviderClient;
 
@@ -90,6 +90,66 @@ describe("AiProviderClient", () => {
       thinking: { type: "disabled" },
       temperature: 0.1,
     });
+  });
+
+  it("returns token usage when the provider stream includes usage chunks", async () => {
+    const client = new ClientCtor(async () => {
+      return new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"{\\"title\\":\\"ok\\"}","role":"assistant"},"index":0}]}',
+          'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":6,"total_tokens":16}}',
+          "data: [DONE]",
+        ].join("\n\n"),
+        { status: 200 },
+      );
+    });
+
+    const response = await client.complete({
+      apiKey: "test-key",
+      model: "test-model",
+      messages: [{ role: "user", content: "只返回 JSON" }],
+      timeoutMs: 12_000,
+      maxRetries: 0,
+    });
+
+    assert.deepEqual(response, {
+      model: "test-model",
+      content: '{"title":"ok"}',
+      tokenUsage: {
+        totalTokens: 16,
+        promptTokens: 10,
+        completionTokens: 6,
+      },
+    });
+  });
+
+  it("emits a usage-only delta for stream diagnostics", async () => {
+    const client = new ClientCtor(async () => {
+      return new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"正文","role":"assistant"},"index":0}]}',
+          'data: {"choices":[],"bot_usage":{"model_usage":[{"total_tokens":9}]}}',
+          "data: [DONE]",
+        ].join("\n\n"),
+        { status: 200 },
+      );
+    });
+
+    const deltas: AiProviderTextDelta[] = [];
+    for await (const delta of client.streamText({
+      apiKey: "test-key",
+      model: "test-model",
+      messages: [{ role: "user", content: "只返回 JSON" }],
+      timeoutMs: 12_000,
+      maxRetries: 0,
+    })) {
+      deltas.push(delta);
+    }
+
+    assert.deepEqual(deltas, [
+      { model: "test-model", content: "正文" },
+      { model: "test-model", content: "", tokenUsage: { totalTokens: 9, promptTokens: null, completionTokens: null } },
+    ]);
   });
 
   it("maps provider timeout failures to a gateway timeout error", async () => {

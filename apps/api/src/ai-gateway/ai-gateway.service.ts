@@ -15,8 +15,23 @@ import type {
 } from "@bytecamp-aigc/shared";
 import { AuditDecision, RiskCategory, qualityWeights } from "@bytecamp-aigc/shared";
 import { PromptsService } from "../prompts/prompts.service";
-import { AiProviderClient, type AiChatMessage } from "./ai-provider.client";
+import {
+  AiProviderClient,
+  type AiChatMessage,
+  type AiProviderTextDelta,
+  type AiTokenUsage,
+} from "./ai-provider.client";
 import { AiProviderConfigurationException } from "./ai-gateway.errors";
+import {
+  AiRequestLogger,
+  createAiRequestMetric,
+  createEmptyAiTokenUsage,
+  finishAiRequestMetric,
+  mergeAiTokenUsage,
+  type AiRequestFeature,
+  type AiRequestMetric,
+  type AiRequestProviderMode,
+} from "./ai-request-log";
 import {
   ARTICLE_GENERATION_CATEGORY,
   buildArticleGenerationMessages,
@@ -116,149 +131,283 @@ interface ProviderConfig {
 
 @Injectable()
 export class AiGatewayService {
+  private readonly fallbackRequestLogger = new AiRequestLogger();
+
   constructor(
     private readonly config: ConfigService,
     @Optional() private readonly promptsService?: PromptsService,
     @Optional() private readonly providerClient?: AiProviderClient,
+    @Optional() private readonly requestLogger?: AiRequestLogger,
   ) {}
 
   async generateArticleDraft(input: GenerateArticleInput, userId?: string): Promise<GeneratedArticleDraft> {
     if (!this.shouldUseLiveProvider()) {
-      return this.generateMockArticleDraft(input);
+      const metric = this.createAiRequestMetric("article_generation", "mock", this.getMockModel());
+
+      try {
+        const article = this.generateMockArticleDraft(input);
+        this.logAiRequestSuccess(metric, article.model);
+        return article;
+      } catch (error) {
+        this.logAiRequestError(metric, error);
+        throw error;
+      }
     }
 
-    const providerConfig = this.getRequiredProviderConfig();
-    const prompt = await this.getArticleGenerationPrompt(input.promptId, userId);
-    const completion = await this.getProviderClient().complete({
-      ...providerConfig,
-      messages: buildArticleGenerationMessages(input, prompt),
-    });
-    const article = parseArticleGenerationJson(completion.content);
+    const metric = this.createAiRequestMetric("article_generation", "live", this.getConfiguredModelForLog());
 
-    return {
-      model: completion.model,
-      title: article.title,
-      outline: article.outline,
-      bodyText: article.bodyText,
-      body: this.toRichTextDocument(this.paragraphsFromText(article.bodyText)),
-    };
+    try {
+      const providerConfig = this.getRequiredProviderConfig();
+      const prompt = await this.getArticleGenerationPrompt(input.promptId, userId);
+      const completion = await this.getProviderClient().complete({
+        ...providerConfig,
+        messages: buildArticleGenerationMessages(input, prompt),
+      });
+      const article = parseArticleGenerationJson(completion.content);
+
+      this.logAiRequestSuccess(metric, completion.model, completion.tokenUsage);
+
+      return {
+        model: completion.model,
+        title: article.title,
+        outline: article.outline,
+        bodyText: article.bodyText,
+        body: this.toRichTextDocument(this.paragraphsFromText(article.bodyText)),
+      };
+    } catch (error) {
+      this.logAiRequestError(metric, error);
+      throw error;
+    }
   }
 
   async auditContent(text: string): Promise<AuditResult> {
     const normalizedText = text.trim();
-    if (!normalizedText) {
-      return this.auditMockContent("");
+
+    if (!normalizedText || !this.shouldUseLiveProvider()) {
+      const metric = this.createAiRequestMetric("content_audit", "mock", this.getMockModel());
+
+      try {
+        const result = this.auditMockContent(normalizedText);
+        this.logAiRequestSuccess(metric, result.model ?? this.getMockModel());
+        return result;
+      } catch (error) {
+        this.logAiRequestError(metric, error);
+        throw error;
+      }
     }
 
-    if (!this.shouldUseLiveProvider()) {
-      return this.auditMockContent(normalizedText);
+    const metric = this.createAiRequestMetric("content_audit", "live", this.getConfiguredModelForLog());
+
+    try {
+      const providerConfig = this.getRequiredProviderConfig();
+      const completion = await this.getProviderClient().complete({
+        ...providerConfig,
+        messages: buildContentAuditMessages(normalizedText),
+      });
+      const result = parseAuditJson(completion.content, {
+        model: completion.model,
+        source: "MODEL",
+      });
+
+      this.logAiRequestSuccess(metric, completion.model, completion.tokenUsage);
+      return result;
+    } catch (error) {
+      this.logAiRequestError(metric, error);
+      throw error;
     }
-
-    const providerConfig = this.getRequiredProviderConfig();
-    const completion = await this.getProviderClient().complete({
-      ...providerConfig,
-      messages: buildContentAuditMessages(normalizedText),
-    });
-
-    return parseAuditJson(completion.content, {
-      model: completion.model,
-      source: "MODEL",
-    });
   }
 
   async scoreArticleQuality(input: { title: string; text: string; safetyScore?: number }): Promise<QualityScore> {
     if (!this.shouldUseLiveProvider()) {
-      return this.scoreMockArticleQuality(input);
+      const metric = this.createAiRequestMetric("quality_scoring", "mock", this.getMockModel());
+
+      try {
+        const score = this.scoreMockArticleQuality(input);
+        this.logAiRequestSuccess(metric, this.getMockModel());
+        return score;
+      } catch (error) {
+        this.logAiRequestError(metric, error);
+        throw error;
+      }
     }
 
-    const providerConfig = this.getRequiredProviderConfig();
-    const completion = await this.getProviderClient().complete({
-      ...providerConfig,
-      messages: buildQualityScoringMessages(input),
-    });
+    const metric = this.createAiRequestMetric("quality_scoring", "live", this.getConfiguredModelForLog());
 
-    return parseQualityScoreJson(completion.content, input.safetyScore);
+    try {
+      const providerConfig = this.getRequiredProviderConfig();
+      const completion = await this.getProviderClient().complete({
+        ...providerConfig,
+        messages: buildQualityScoringMessages(input),
+      });
+      const score = parseQualityScoreJson(completion.content, input.safetyScore);
+
+      this.logAiRequestSuccess(metric, completion.model, completion.tokenUsage);
+      return score;
+    } catch (error) {
+      this.logAiRequestError(metric, error);
+      throw error;
+    }
   }
 
   async *streamArticleDraft(input: GenerateArticleInput, userId: string): AsyncGenerator<AiStreamEvent> {
-    if (this.shouldUseLiveProvider()) {
-      yield* this.streamLiveArticleDraft(input, userId);
-      return;
+    const shouldUseLiveProvider = this.shouldUseLiveProvider();
+    const metric = this.createAiRequestMetric(
+      "article_generation",
+      shouldUseLiveProvider ? "live" : "mock",
+      shouldUseLiveProvider ? this.getConfiguredModelForLog() : this.getMockModel(),
+    );
+    let model = metric.model;
+    let tokenUsage = createEmptyAiTokenUsage();
+
+    try {
+      if (shouldUseLiveProvider) {
+        yield* this.streamLiveArticleDraft(input, userId, (delta) => {
+          model = delta.model;
+          tokenUsage = mergeAiTokenUsage(tokenUsage, delta.tokenUsage);
+        });
+        this.logAiRequestSuccess(metric, model, tokenUsage);
+        return;
+      }
+
+      const article = this.generateMockArticleDraft(input);
+      model = article.model;
+
+      yield { event: "meta", data: { model: article.model } };
+      yield { event: "title", data: { text: article.title } };
+      yield { event: "outline", data: { items: article.outline } };
+
+      for (const paragraph of this.paragraphsFromText(article.bodyText)) {
+        yield { event: "body-delta", data: { text: `${paragraph}\n\n` } };
+      }
+
+      yield {
+        event: "done",
+        data: {
+          title: article.title,
+          outline: article.outline,
+          bodyText: article.bodyText,
+          body: article.body,
+        },
+      };
+      this.logAiRequestSuccess(metric, model, tokenUsage);
+    } catch (error) {
+      this.logAiRequestError(metric, error, model, tokenUsage);
+      throw error;
     }
-
-    const article = await this.generateArticleDraft(input, userId);
-
-    yield { event: "meta", data: { model: article.model } };
-    yield { event: "title", data: { text: article.title } };
-    yield { event: "outline", data: { items: article.outline } };
-
-    for (const paragraph of this.paragraphsFromText(article.bodyText)) {
-      yield { event: "body-delta", data: { text: `${paragraph}\n\n` } };
-    }
-
-    yield {
-      event: "done",
-      data: {
-        title: article.title,
-        outline: article.outline,
-        bodyText: article.bodyText,
-        body: article.body,
-      },
-    };
   }
 
   async *streamTitleOptimization(input: OptimizeTitlesInput): AsyncGenerator<AiStreamEvent> {
-    if (this.shouldUseLiveProvider()) {
-      yield* this.streamLiveTitleOptimization(input);
-      return;
-    }
+    const shouldUseLiveProvider = this.shouldUseLiveProvider();
+    const metric = this.createAiRequestMetric(
+      "title_optimization",
+      shouldUseLiveProvider ? "live" : "mock",
+      shouldUseLiveProvider ? this.getConfiguredModelForLog() : this.getMockModel(),
+    );
+    let model = metric.model;
+    let tokenUsage = createEmptyAiTokenUsage();
 
-    const response = await this.optimizeTitles(input);
+    try {
+      if (shouldUseLiveProvider) {
+        yield* this.streamLiveTitleOptimization(input, (delta) => {
+          model = delta.model;
+          tokenUsage = mergeAiTokenUsage(tokenUsage, delta.tokenUsage);
+        });
+        this.logAiRequestSuccess(metric, model, tokenUsage);
+        return;
+      }
 
-    yield { event: "meta", data: { model: response.model } };
-    for (const title of response.titles) {
-      yield { event: "title", data: { text: title } };
+      const response = await this.optimizeTitles(input);
+      model = response.model;
+
+      yield { event: "meta", data: { model: response.model } };
+      for (const title of response.titles) {
+        yield { event: "title", data: { text: title } };
+      }
+      yield { event: "done", data: { titles: response.titles } };
+      this.logAiRequestSuccess(metric, model, tokenUsage);
+    } catch (error) {
+      this.logAiRequestError(metric, error, model, tokenUsage);
+      throw error;
     }
-    yield { event: "done", data: { titles: response.titles } };
   }
 
   async *streamRewrite(input: RewriteArticleInput): AsyncGenerator<AiStreamEvent> {
-    if (this.shouldUseLiveProvider()) {
-      yield* this.streamLiveRewrite(input);
-      return;
-    }
+    const shouldUseLiveProvider = this.shouldUseLiveProvider();
+    const metric = this.createAiRequestMetric(
+      "article_rewrite",
+      shouldUseLiveProvider ? "live" : "mock",
+      shouldUseLiveProvider ? this.getConfiguredModelForLog() : this.getMockModel(),
+    );
+    let model = metric.model;
+    let tokenUsage = createEmptyAiTokenUsage();
 
-    const response = await this.rewriteArticle(input);
+    try {
+      if (shouldUseLiveProvider) {
+        yield* this.streamLiveRewrite(input, (delta) => {
+          model = delta.model;
+          tokenUsage = mergeAiTokenUsage(tokenUsage, delta.tokenUsage);
+        });
+        this.logAiRequestSuccess(metric, model, tokenUsage);
+        return;
+      }
 
-    yield { event: "meta", data: { model: response.model } };
-    yield { event: "text-delta", data: { text: response.text } };
-    for (const suggestion of response.suggestions) {
-      yield { event: "suggestion", data: { text: suggestion } };
+      const response = await this.rewriteArticle(input);
+      model = response.model;
+
+      yield { event: "meta", data: { model: response.model } };
+      yield { event: "text-delta", data: { text: response.text } };
+      for (const suggestion of response.suggestions) {
+        yield { event: "suggestion", data: { text: suggestion } };
+      }
+      yield { event: "done", data: { text: response.text, suggestions: response.suggestions } };
+      this.logAiRequestSuccess(metric, model, tokenUsage);
+    } catch (error) {
+      this.logAiRequestError(metric, error, model, tokenUsage);
+      throw error;
     }
-    yield { event: "done", data: { text: response.text, suggestions: response.suggestions } };
   }
 
   async *streamComplianceRewrite(input: ComplianceRewriteContext): AsyncGenerator<AiStreamEvent> {
-    if (this.shouldUseLiveProvider()) {
-      yield* this.streamLiveComplianceRewrite(input);
-      return;
-    }
+    const shouldUseLiveProvider = this.shouldUseLiveProvider();
+    const metric = this.createAiRequestMetric(
+      "compliance_rewrite",
+      shouldUseLiveProvider ? "live" : "mock",
+      shouldUseLiveProvider ? this.getConfiguredModelForLog() : this.getMockModel(),
+    );
+    let model = metric.model;
+    let tokenUsage = createEmptyAiTokenUsage();
 
-    const response = this.rewriteMockComplianceText(input);
+    try {
+      if (shouldUseLiveProvider) {
+        yield* this.streamLiveComplianceRewrite(input, (delta) => {
+          model = delta.model;
+          tokenUsage = mergeAiTokenUsage(tokenUsage, delta.tokenUsage);
+        });
+        this.logAiRequestSuccess(metric, model, tokenUsage);
+        return;
+      }
 
-    yield { event: "meta", data: { model: this.getMockModel() } };
-    yield { event: "text-delta", data: { text: response.text } };
-    for (const suggestion of response.suggestions) {
-      yield { event: "suggestion", data: { text: suggestion } };
+      const response = this.rewriteMockComplianceText(input);
+      model = this.getMockModel();
+
+      yield { event: "meta", data: { model } };
+      yield { event: "text-delta", data: { text: response.text } };
+      for (const suggestion of response.suggestions) {
+        yield { event: "suggestion", data: { text: suggestion } };
+      }
+      yield {
+        event: "done",
+        data: {
+          bodyText: response.text,
+          body: this.toRichTextDocument(this.paragraphsFromText(response.text)),
+          suggestions: response.suggestions,
+        },
+      };
+      this.logAiRequestSuccess(metric, model, tokenUsage);
+    } catch (error) {
+      this.logAiRequestError(metric, error, model, tokenUsage);
+      throw error;
     }
-    yield {
-      event: "done",
-      data: {
-        bodyText: response.text,
-        body: this.toRichTextDocument(this.paragraphsFromText(response.text)),
-        suggestions: response.suggestions,
-      },
-    };
   }
 
   async generateCreatorInspirations(): Promise<CreatorInspirationsResponse> {
@@ -350,10 +499,14 @@ export class AiGatewayService {
     };
   }
 
-  private async *streamLiveArticleDraft(input: GenerateArticleInput, userId: string): AsyncGenerator<AiStreamEvent> {
+  private async *streamLiveArticleDraft(
+    input: GenerateArticleInput,
+    userId: string,
+    onProviderDelta?: (delta: AiProviderTextDelta) => void,
+  ): AsyncGenerator<AiStreamEvent> {
     const providerConfig = this.getRequiredProviderConfig();
     const prompt = await this.getArticleGenerationPrompt(input.promptId, userId);
-    const stream = this.streamProviderText(providerConfig, buildArticleGenerationMessages(input, prompt));
+    const stream = this.streamProviderText(providerConfig, buildArticleGenerationMessages(input, prompt), onProviderDelta);
     let rawContent = "";
     let emittedTitle = "";
     let emittedBodyText = "";
@@ -395,13 +548,16 @@ export class AiGatewayService {
     };
   }
 
-  private async *streamLiveTitleOptimization(input: OptimizeTitlesInput): AsyncGenerator<AiStreamEvent> {
+  private async *streamLiveTitleOptimization(
+    input: OptimizeTitlesInput,
+    onProviderDelta?: (delta: AiProviderTextDelta) => void,
+  ): AsyncGenerator<AiStreamEvent> {
     if (!input.topic?.trim()) {
       throw new BadRequestException("Topic is required");
     }
 
     const providerConfig = this.getRequiredProviderConfig();
-    const stream = this.streamProviderText(providerConfig, buildTitleOptimizationMessages(input));
+    const stream = this.streamProviderText(providerConfig, buildTitleOptimizationMessages(input), onProviderDelta);
     let rawContent = "";
     const emittedTitles: string[] = [];
 
@@ -432,10 +588,13 @@ export class AiGatewayService {
     yield { event: "done", data: { titles } };
   }
 
-  private async *streamLiveRewrite(input: RewriteArticleInput): AsyncGenerator<AiStreamEvent> {
+  private async *streamLiveRewrite(
+    input: RewriteArticleInput,
+    onProviderDelta?: (delta: AiProviderTextDelta) => void,
+  ): AsyncGenerator<AiStreamEvent> {
     const normalizedInput = this.normalizeRewriteInput(input);
     const providerConfig = this.getRequiredProviderConfig();
-    const stream = this.streamProviderText(providerConfig, buildRewriteMessages(normalizedInput));
+    const stream = this.streamProviderText(providerConfig, buildRewriteMessages(normalizedInput), onProviderDelta);
     let rawContent = "";
     let emittedText = "";
 
@@ -463,9 +622,12 @@ export class AiGatewayService {
     yield { event: "done", data: { text: parsed.text, suggestions: parsed.suggestions } };
   }
 
-  private async *streamLiveComplianceRewrite(input: ComplianceRewriteContext): AsyncGenerator<AiStreamEvent> {
+  private async *streamLiveComplianceRewrite(
+    input: ComplianceRewriteContext,
+    onProviderDelta?: (delta: AiProviderTextDelta) => void,
+  ): AsyncGenerator<AiStreamEvent> {
     const providerConfig = this.getRequiredProviderConfig();
-    const stream = this.streamProviderText(providerConfig, buildComplianceRewriteMessages(input));
+    const stream = this.streamProviderText(providerConfig, buildComplianceRewriteMessages(input), onProviderDelta);
     let rawContent = "";
     let emittedText = "";
 
@@ -500,11 +662,67 @@ export class AiGatewayService {
     };
   }
 
-  private streamProviderText(providerConfig: ProviderConfig, messages: AiChatMessage[]) {
-    return this.getProviderClient().streamText({
+  private async *streamProviderText(
+    providerConfig: ProviderConfig,
+    messages: AiChatMessage[],
+    onProviderDelta?: (delta: AiProviderTextDelta) => void,
+  ) {
+    for await (const delta of this.getProviderClient().streamText({
       ...providerConfig,
       messages,
+    })) {
+      onProviderDelta?.(delta);
+      if (delta.content) {
+        yield delta;
+      }
+    }
+  }
+
+  private createAiRequestMetric(
+    feature: AiRequestFeature,
+    providerMode: AiRequestProviderMode,
+    model: string,
+  ): AiRequestMetric {
+    return createAiRequestMetric({
+      feature,
+      providerMode,
+      model,
     });
+  }
+
+  private logAiRequestSuccess(metric: AiRequestMetric, model?: string, tokenUsage?: AiTokenUsage) {
+    this.logAiRequest(
+      finishAiRequestMetric(metric, {
+        status: "success",
+        model,
+        tokenUsage,
+      }),
+    );
+  }
+
+  private logAiRequestError(
+    metric: AiRequestMetric,
+    error: unknown,
+    model?: string,
+    tokenUsage?: AiTokenUsage,
+  ) {
+    this.logAiRequest(
+      finishAiRequestMetric(metric, {
+        status: "error",
+        model,
+        tokenUsage,
+        error,
+      }),
+    );
+  }
+
+  private logAiRequest(payload: Parameters<AiRequestLogger["log"]>[0]) {
+    (this.requestLogger ?? this.fallbackRequestLogger).log(payload);
+  }
+
+  private getConfiguredModelForLog() {
+    const configuredModel = this.readConfig("AI_MODEL");
+    return this.isPlaceholder(configuredModel) ? "unknown-model" : configuredModel ?? "unknown-model";
   }
 
   private normalizeRewriteInput(input: RewriteArticleInput): RewriteArticleInput {

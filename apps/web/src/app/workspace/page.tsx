@@ -29,6 +29,12 @@ import {
 import { formatAssetSize, resolveAssetUrl } from "@/lib/assets";
 import { nextSelectedPromptIdAfterDelete } from "@/lib/prompt-management";
 import { buildWorkspaceGeneratedBody } from "@/lib/workspace-generated-body";
+import {
+  clearWorkspaceLocalDraftState,
+  createWorkspaceLocalDraftState,
+  readWorkspaceLocalDraftState,
+  writeWorkspaceLocalDraftState,
+} from "@/lib/workspace-local-draft-state";
 import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
 import {
   createWorkspaceImageInsertRequest,
@@ -49,7 +55,9 @@ type RewriteModeValue = (typeof rewriteModes)[number]["value"];
 type WorkbenchStatus = "loading" | "idle" | "streaming" | "saving";
 type StreamStatus = "idle" | "streaming" | "error";
 
-const defaultTopic = "AI 如何改变内容创作";
+const defaultTopic = "";
+const defaultAudience = "内容创作者";
+const defaultStyle = "科普";
 
 const emptyDoc: RichTextDocument = replaceWithPlainText("");
 
@@ -58,6 +66,14 @@ function textFromDoc(doc: RichTextDocument) {
     .flatMap((node) => node.content ?? [])
     .map((node) => node.text ?? "")
     .join("");
+}
+
+function formatLocalSavedAt(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
 }
 
 function createEmptyGenerated(model = "streaming"): GeneratedArticleDraft {
@@ -75,8 +91,8 @@ export default function WorkspacePage() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [topic, setTopic] = useState(defaultTopic);
-  const [audience, setAudience] = useState("内容创作者");
-  const [style, setStyle] = useState("科普");
+  const [audience, setAudience] = useState(defaultAudience);
+  const [style, setStyle] = useState(defaultStyle);
   const [prompts, setPrompts] = useState<PromptTemplateSummary[]>([]);
   const [selectedPromptId, setSelectedPromptId] = useState("");
   const [promptsLoading, setPromptsLoading] = useState(false);
@@ -94,31 +110,82 @@ export default function WorkspacePage() {
   const [error, setError] = useState("");
   const [sidePanelTab, setSidePanelTab] = useState<WorkspaceSidePanelTab>("ai");
   const [imageInsertRequest, setImageInsertRequest] = useState<EditorImageInsertRequest | null>(null);
+  const [localSaveReady, setLocalSaveReady] = useState(false);
+  const [localSavedAt, setLocalSavedAt] = useState<string | null>(null);
+  const [pendingExitHref, setPendingExitHref] = useState<string | null>(null);
+  const [exitSaveStatus, setExitSaveStatus] = useState<"idle" | "saving">("idle");
+
+  const wordCount = useMemo(() => {
+    if (!generated) return 0;
+    return plainTextFromRichText(generated.body).length;
+  }, [generated]);
+  const hasWorkspaceDraftContent = useMemo(
+    () =>
+      Boolean(
+        topic.trim() ||
+          draftTitle.trim() ||
+          generated?.title.trim() ||
+          generated?.bodyText.trim() ||
+          generated?.outline.length,
+      ),
+    [draftTitle, generated, topic],
+  );
+  const canSaveWorkspaceDraft = Boolean(token && generated && status !== "saving" && status !== "streaming");
 
   useEffect(() => {
     const storedToken = getStoredToken();
     const queryTopic = normalizeWorkspaceTopic(new URLSearchParams(window.location.search).get("topic"));
+    const localDraft = readWorkspaceLocalDraftState(window.localStorage);
 
-    if (queryTopic) {
+    if (localDraft) {
+      setTopic(queryTopic || localDraft.topic || defaultTopic);
+      setAudience(localDraft.audience);
+      setStyle(localDraft.style);
+      setSelectedPromptId(localDraft.selectedPromptId);
+      setDraftTitle(localDraft.draftTitle);
+      setGenerated(localDraft.generated);
+      setLocalSavedAt(localDraft.localUpdatedAt || null);
+    } else if (queryTopic) {
       setTopic(queryTopic);
     }
 
     setToken(storedToken);
     setUser(getStoredUser());
     setStatus("idle");
+    setLocalSaveReady(true);
 
     if (storedToken) {
       void loadDrafts(storedToken);
-      void loadPrompts(storedToken);
+      void loadPrompts(storedToken, localDraft?.selectedPromptId ?? "");
     }
   }, []);
 
-  const wordCount = useMemo(() => {
-    if (!generated) return 0;
-    return plainTextFromRichText(generated.body).length;
-  }, [generated]);
+  useEffect(() => {
+    if (!localSaveReady) return;
 
-  async function loadPrompts(authToken: string) {
+    if (!hasWorkspaceDraftContent) {
+      clearWorkspaceLocalDraftState(window.localStorage);
+      setLocalSavedAt(null);
+      return;
+    }
+
+    const savedAt = new Date().toISOString();
+    writeWorkspaceLocalDraftState(
+      window.localStorage,
+      createWorkspaceLocalDraftState({
+        topic,
+        audience,
+        style,
+        selectedPromptId,
+        draftTitle,
+        generated,
+        localUpdatedAt: savedAt,
+      }),
+    );
+    setLocalSavedAt(savedAt);
+  }, [audience, draftTitle, generated, hasWorkspaceDraftContent, localSaveReady, selectedPromptId, style, topic]);
+
+  async function loadPrompts(authToken: string, preferredPromptId = "") {
     setPromptsLoading(true);
     const response = await apiFetch("/prompts?category=article_generation", { authToken });
     const payload = await readApiJson<ListPromptsResponse | { message?: string | string[] }>(response);
@@ -130,7 +197,11 @@ export default function WorkspacePage() {
     }
 
     setPrompts(payload.items);
-    setSelectedPromptId(payload.items.find((item) => item.isStarter)?.id ?? payload.items[0]?.id ?? "");
+    setSelectedPromptId((currentPromptId) => {
+      const restoredPromptId = preferredPromptId || currentPromptId;
+      if (restoredPromptId && payload.items.some((item) => item.id === restoredPromptId)) return restoredPromptId;
+      return payload.items.find((item) => item.isStarter)?.id ?? payload.items[0]?.id ?? "";
+    });
   }
 
   function handlePromptSaved(prompt: PromptTemplateDetail) {
@@ -414,8 +485,27 @@ export default function WorkspacePage() {
     appendGeneratedBody(text);
   }
 
-  async function saveDraft() {
-    if (!token || !generated || status === "streaming") return;
+  function requestWorkspaceExit(href: string) {
+    if (!hasWorkspaceDraftContent) {
+      router.push(href);
+      return;
+    }
+
+    setPendingExitHref(href);
+  }
+
+  function discardWorkspaceDraftAndExit() {
+    if (!pendingExitHref) return;
+
+    setLocalSaveReady(false);
+    clearWorkspaceLocalDraftState(window.localStorage);
+    setLocalSavedAt(null);
+    setPendingExitHref(null);
+    router.push(pendingExitHref);
+  }
+
+  async function saveDraft(options?: { afterSaveHref?: string }) {
+    if (!token || !generated || status === "saving" || status === "streaming") return false;
 
     setStatus("saving");
     setError("");
@@ -435,14 +525,28 @@ export default function WorkspacePage() {
       if (!response.ok || !payload || "message" in payload) {
         setError(getApiErrorMessage(payload, "保存草稿失败，请稍后重试。"));
         setStatus("idle");
-        return;
+        return false;
       }
 
-      router.push(`/drafts/${(payload as { id: string }).id}`);
+      setLocalSaveReady(false);
+      clearWorkspaceLocalDraftState(window.localStorage);
+      setLocalSavedAt(null);
+      setPendingExitHref(null);
+      router.push(options?.afterSaveHref ?? `/drafts/${(payload as { id: string }).id}`);
+      return true;
     } catch {
       setError("无法连接 API 服务，请稍后重试。");
       setStatus("idle");
+      return false;
     }
+  }
+
+  async function saveDraftAndExit() {
+    if (!pendingExitHref || !canSaveWorkspaceDraft || exitSaveStatus === "saving") return;
+
+    setExitSaveStatus("saving");
+    const saved = await saveDraft({ afterSaveHref: pendingExitHref });
+    if (!saved) setExitSaveStatus("idle");
   }
 
   return (
@@ -450,13 +554,14 @@ export default function WorkspacePage() {
       <header className="sticky top-0 z-20 border-b border-[#ededed] bg-white">
         <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-5">
           <div className="flex items-center gap-4">
-            <Link
+            <button
               aria-label="返回创作者主页"
               className="flex h-9 w-9 items-center justify-center rounded-md bg-[#f5f5f5] text-lg text-[#7b8088] hover:bg-[#eeeeee]"
-              href="/creator"
+              type="button"
+              onClick={() => requestWorkspaceExit("/creator")}
             >
               ←
-            </Link>
+            </button>
             <div>
               <div className="text-lg font-semibold">发布文章</div>
               <div className="text-xs text-[#8f959e]">AI Creator Hub 工作台</div>
@@ -464,17 +569,29 @@ export default function WorkspacePage() {
           </div>
 
           <div className="flex items-center gap-5 text-sm text-[#4e5661]">
-            <Link className="hidden hover:text-[#ff4d4f] sm:block" href="/docs">
+            <button
+              className="hidden hover:text-[#ff4d4f] sm:block"
+              type="button"
+              onClick={() => requestWorkspaceExit("/docs")}
+            >
               发文规范
-            </Link>
+            </button>
             {user ? (
-              <Link className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]" href="/creator">
+              <button
+                className="rounded-md bg-[#f6f7f9] px-3 py-2 font-medium hover:bg-[#eeeeee]"
+                type="button"
+                onClick={() => requestWorkspaceExit("/creator")}
+              >
                 {user.nickname}
-              </Link>
+              </button>
             ) : (
-              <Link className="rounded-md bg-[#ff4d4f] px-4 py-2 font-medium text-white" href="/login">
+              <button
+                className="rounded-md bg-[#ff4d4f] px-4 py-2 font-medium text-white"
+                type="button"
+                onClick={() => requestWorkspaceExit("/login")}
+              >
                 登录
-              </Link>
+              </button>
             )}
           </div>
         </div>
@@ -493,9 +610,13 @@ export default function WorkspacePage() {
                     选择模板并输入主题，AI 会流式生成标题、大纲和正文。
                   </p>
                 </div>
-                <Link className="text-sm font-medium text-[#ff4d4f]" href="/drafts">
+                <button
+                  className="text-sm font-medium text-[#ff4d4f]"
+                  type="button"
+                  onClick={() => requestWorkspaceExit("/drafts")}
+                >
                   我的草稿
-                </Link>
+                </button>
               </div>
 
               <PromptManagerPanel
@@ -571,9 +692,13 @@ export default function WorkspacePage() {
                 <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[#6b7280]">
                   工作台会把 AI 流式生成、草稿保存、编辑器和发布审核连成一条链路。先登录即可体验演示账号。
                 </p>
-                <Link className="mt-6 inline-flex rounded-md bg-[#ff4d4f] px-5 py-3 text-sm font-semibold text-white" href="/login">
+                <button
+                  className="mt-6 inline-flex rounded-md bg-[#ff4d4f] px-5 py-3 text-sm font-semibold text-white"
+                  type="button"
+                  onClick={() => requestWorkspaceExit("/login")}
+                >
                   进入登录
-                </Link>
+                </button>
               </div>
             ) : (
               <>
@@ -650,7 +775,13 @@ export default function WorkspacePage() {
 
           <div className="sticky bottom-0 z-30 flex flex-wrap items-center justify-between gap-4 border-t border-[#eeeeee] bg-white px-8 py-4">
             <div className="flex flex-wrap items-center gap-6 text-sm text-[#8f959e]">
-              <span>{status === "streaming" ? "AI 正在生成" : "草稿未保存"}</span>
+              <span>
+                {status === "streaming"
+                  ? "AI 正在生成"
+                  : localSavedAt
+                    ? `已本地保存 ${formatLocalSavedAt(localSavedAt)}`
+                    : "草稿未保存"}
+              </span>
               <span>共 {wordCount} 字</span>
               <span>发布前仍需审核评分</span>
             </div>
@@ -658,7 +789,7 @@ export default function WorkspacePage() {
               className="rounded-md bg-[#ff4d4f] px-6 py-2.5 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
               disabled={!generated || status === "saving" || status === "streaming"}
               type="button"
-              onClick={saveDraft}
+              onClick={() => void saveDraft()}
             >
               {status === "saving" ? "保存中..." : "保存草稿"}
             </button>
@@ -853,10 +984,61 @@ export default function WorkspacePage() {
               onSelectTitle={setDraftTitle}
               onReplaceBody={replaceGeneratedBody}
               onAppendBody={appendGeneratedBody}
+              onOpenDraft={(draftId) => requestWorkspaceExit(`/drafts/${draftId}`)}
             />
           )}
         </div>
       </div>
+      {pendingExitHref ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
+          <div
+            aria-modal="true"
+            className="w-full max-w-[420px] rounded-lg bg-white p-5 shadow-[0_18px_56px_rgba(31,35,41,0.18)]"
+            role="dialog"
+          >
+            <h2 className="text-base font-semibold text-[#1f2329]">离开工作台前保存草稿吗？</h2>
+            <p className="mt-3 text-sm leading-6 text-[#5d6673]">
+              选择保存会先创建草稿再离开；选择不保存会清空本地暂存内容，下次进入工作台创作区为空。
+            </p>
+            {!canSaveWorkspaceDraft ? (
+              <p className="mt-3 rounded-md bg-[#fff7e8] px-3 py-2 text-xs leading-5 text-[#9a6200]">
+                当前还没有可保存的正文，或 AI 正在生成中。可以继续编辑，也可以不保存退出。
+              </p>
+            ) : null}
+            {error ? (
+              <p className="mt-3 rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-3 py-2 text-xs leading-5 text-[#d92d2d]">
+                {error}
+              </p>
+            ) : null}
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                className="rounded-md border border-[#dedede] px-4 py-2 text-sm font-medium text-[#4e5661] hover:bg-[#f6f7f9]"
+                disabled={exitSaveStatus === "saving"}
+                type="button"
+                onClick={() => setPendingExitHref(null)}
+              >
+                继续编辑
+              </button>
+              <button
+                className="rounded-md border border-[#ffd4d4] px-4 py-2 text-sm font-medium text-[#d92d2d] hover:bg-[#fff6f6] disabled:text-[#d6a4a5]"
+                disabled={exitSaveStatus === "saving"}
+                type="button"
+                onClick={discardWorkspaceDraftAndExit}
+              >
+                不保存退出
+              </button>
+              <button
+                className="rounded-md bg-[#ff4d4f] px-4 py-2 text-sm font-semibold text-white disabled:bg-[#f3a5a6]"
+                disabled={!canSaveWorkspaceDraft || exitSaveStatus === "saving"}
+                type="button"
+                onClick={() => void saveDraftAndExit()}
+              >
+                {exitSaveStatus === "saving" ? "保存中..." : "保存草稿"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

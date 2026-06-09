@@ -32,6 +32,7 @@ interface AiWritingAssistantProps {
   onSelectTitle: (title: string) => void;
   onReplaceBody: (text: string) => void;
   onAppendBody?: (text: string) => void;
+  onOpenDraft?: (draftId: string) => void;
 }
 
 export function AiWritingAssistant({
@@ -48,6 +49,7 @@ export function AiWritingAssistant({
   onSelectTitle,
   onReplaceBody,
   onAppendBody,
+  onOpenDraft,
 }: AiWritingAssistantProps) {
   const [titleStatus, setTitleStatus] = useState<StreamStatus>("idle");
   const [rewriteStatus, setRewriteStatus] = useState<StreamStatus>("idle");
@@ -292,16 +294,26 @@ export function AiWritingAssistant({
           <section className="border-t border-[#eeeeee] pt-5">
             <div className="mb-3 text-sm font-semibold text-[#4e5661]">最近草稿</div>
             <div className="grid gap-2">
-              {recentDrafts.slice(0, 3).map((draft) => (
-                <Link
-                  className="rounded-md border border-[#eeeeee] bg-white px-3 py-2 text-sm hover:border-[#ffb6b7]"
-                  href={`/drafts/${draft.id}`}
-                  key={draft.id}
-                >
-                  <div className="line-clamp-1 font-medium text-[#1f2329]">{draft.title}</div>
-                  <div className="mt-1 text-xs text-[#8f959e]">v{draft.version}</div>
-                </Link>
-              ))}
+              {recentDrafts.slice(0, 3).map((draft) =>
+                onOpenDraft ? (
+                  <button
+                    className="rounded-md border border-[#eeeeee] bg-white px-3 py-2 text-left text-sm hover:border-[#ffb6b7]"
+                    key={draft.id}
+                    type="button"
+                    onClick={() => onOpenDraft(draft.id)}
+                  >
+                    <DraftLinkContent draft={draft} />
+                  </button>
+                ) : (
+                  <Link
+                    className="rounded-md border border-[#eeeeee] bg-white px-3 py-2 text-sm hover:border-[#ffb6b7]"
+                    href={`/drafts/${draft.id}`}
+                    key={draft.id}
+                  >
+                    <DraftLinkContent draft={draft} />
+                  </Link>
+                ),
+              )}
             </div>
           </section>
         ) : null}
@@ -362,4 +374,13 @@ async function streamRequest(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
+}
+
+function DraftLinkContent({ draft }: { draft: DraftSummary }) {
+  return (
+    <>
+      <div className="line-clamp-1 font-medium text-[#1f2329]">{draft.title}</div>
+      <div className="mt-1 text-xs text-[#8f959e]">v{draft.version}</div>
+    </>
+  );
 }

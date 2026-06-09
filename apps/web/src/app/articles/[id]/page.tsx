@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   EngagementEventType,
@@ -31,6 +31,7 @@ function formatTime(value: string) {
 
 export default function ArticleDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const [article, setArticle] = useState<ArticleDetail | null>(null);
   const [engagement, setEngagement] = useState<ArticleEngagementStats>({ views: 0, likes: 0, favorites: 0 });
   const [error, setError] = useState("");
@@ -163,13 +164,14 @@ export default function ArticleDetailPage() {
 
       <div className="mx-auto grid max-w-[1180px] gap-5 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <article className="min-h-[calc(100vh-8rem)] bg-white px-8 py-10">
-          <Link
-              aria-label="返回首页"
-              className="mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-[#f5f5f5] text-xl text-[#7b8088] hover:bg-[#eeeeee]"
-              href="/"
-            >
-              ‹
-            </Link>
+          <button
+            aria-label="返回上一页"
+            className="mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-[#f5f5f5] text-xl text-[#7b8088] hover:bg-[#eeeeee]"
+            type="button"
+            onClick={() => router.back()}
+          >
+            ‹
+          </button>
           {loading ? (
             <div className="py-16 text-center text-sm text-[#8f959e]">文章加载中...</div>
           ) : error ? (

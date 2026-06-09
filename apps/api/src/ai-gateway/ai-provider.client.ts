@@ -8,12 +8,15 @@ import {
 import {
   buildDoubaoChatCompletionsBody,
   getDoubaoChatCompletionsUrl,
-  parseDoubaoStreamLine,
-  parseDoubaoStreamText,
+  parseDoubaoStreamEvent,
+  parseDoubaoStreamResult,
+  type AiTokenUsage,
   type DoubaoChatMessage,
+  type DoubaoStreamEvent,
 } from "./doubao-chat-format";
 
 export type AiChatMessage = DoubaoChatMessage;
+export type { AiTokenUsage };
 
 export interface AiProviderCompleteInput {
   apiKey: string;
@@ -27,11 +30,13 @@ export interface AiProviderCompleteInput {
 export interface AiProviderCompleteResponse {
   model: string;
   content: string;
+  tokenUsage?: AiTokenUsage;
 }
 
 export interface AiProviderTextDelta {
   model: string;
   content: string;
+  tokenUsage?: AiTokenUsage;
 }
 
 export type DoubaoFetch = (url: string, init: RequestInit) => Promise<Response>;
@@ -47,9 +52,11 @@ export class AiProviderClient {
 
   async complete(input: AiProviderCompleteInput): Promise<AiProviderCompleteResponse> {
     let content = "";
+    let tokenUsage: AiTokenUsage | undefined;
 
     for await (const delta of this.streamText(input)) {
       content += delta.content;
+      if (delta.tokenUsage) tokenUsage = delta.tokenUsage;
     }
 
     if (!content.trim()) {
@@ -59,6 +66,7 @@ export class AiProviderClient {
     return {
       model: input.model,
       content: content.trim(),
+      ...(tokenUsage ? { tokenUsage } : {}),
     };
   }
 
@@ -88,10 +96,10 @@ export class AiProviderClient {
 
     if (!response.body) {
       const rawContent = await this.readResponseText(response);
-      const content = this.parseResponseText(rawContent);
+      const parsed = this.parseResponseText(rawContent);
 
-      if (content) {
-        yield { model: input.model, content };
+      if (parsed.content || parsed.tokenUsage) {
+        yield createAiProviderTextDelta(input.model, parsed.content, parsed.tokenUsage);
       }
       return;
     }
@@ -118,9 +126,9 @@ export class AiProviderClient {
         buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          const content = this.parseResponseLine(line.trim());
-          if (content) {
-            yield { model, content };
+          const parsed = this.parseResponseLine(line.trim());
+          if (parsed.content || parsed.tokenUsage) {
+            yield createAiProviderTextDelta(model, parsed.content ?? "", parsed.tokenUsage);
           }
         }
       }
@@ -128,9 +136,9 @@ export class AiProviderClient {
       buffer += decoder.decode();
       const tail = buffer.trim();
       if (tail) {
-        const content = this.parseResponseLine(tail);
-        if (content) {
-          yield { model, content };
+        const parsed = this.parseResponseLine(tail);
+        if (parsed.content || parsed.tokenUsage) {
+          yield createAiProviderTextDelta(model, parsed.content ?? "", parsed.tokenUsage);
         }
       }
     } catch (error) {
@@ -153,17 +161,21 @@ export class AiProviderClient {
 
   private parseResponseText(rawContent: string) {
     try {
-      return parseDoubaoStreamText(rawContent).trim();
+      const result = parseDoubaoStreamResult(rawContent);
+      return {
+        content: result.content.trim(),
+        tokenUsage: result.tokenUsage,
+      };
     } catch {
       throw new AiProviderBadOutputException();
     }
   }
 
-  private parseResponseLine(line: string) {
-    if (!line) return undefined;
+  private parseResponseLine(line: string): DoubaoStreamEvent {
+    if (!line) return {};
 
     try {
-      return parseDoubaoStreamLine(line);
+      return parseDoubaoStreamEvent(line);
     } catch {
       throw new AiProviderBadOutputException();
     }
@@ -192,6 +204,14 @@ export class AiProviderClient {
       throw new AiProviderUnavailableException(getProviderErrorDetail(error));
     }
   }
+}
+
+function createAiProviderTextDelta(
+  model: string,
+  content: string,
+  tokenUsage?: AiTokenUsage,
+): AiProviderTextDelta {
+  return tokenUsage ? { model, content, tokenUsage } : { model, content };
 }
 
 function createTimeoutSignal(timeoutMs: number) {

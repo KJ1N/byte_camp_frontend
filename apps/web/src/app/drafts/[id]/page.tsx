@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DraftDetail,
   DraftVersionSummary,
@@ -91,6 +91,7 @@ export default function DraftEditorPage() {
     alt?: string;
     assetId?: string;
   } | null>(null);
+  const localEditRevisionRef = useRef(0);
 
   const bodyText = useMemo(() => plainTextFromRichText(body), [body]);
   const wordCount = useMemo(() => bodyText.length, [bodyText]);
@@ -169,6 +170,7 @@ export default function DraftEditorPage() {
     }
 
     const loadedDraft = payload as DraftDetail;
+    localEditRevisionRef.current = 0;
     setDraft(loadedDraft);
     setTitle(loadedDraft.title);
     setBody(loadedDraft.body);
@@ -189,13 +191,13 @@ export default function DraftEditorPage() {
   }
 
   const writeLocalDraftSnapshot = useCallback(
-    (reason: DraftOfflineSaveReason) => {
+    (reason: DraftOfflineSaveReason, overrides?: { title?: string; body?: RichTextDocument }) => {
       if (!draft) return null;
 
       const snapshot = createDraftOfflineState({
         draftId: draft.id,
-        title,
-        body,
+        title: overrides?.title ?? title,
+        body: overrides?.body ?? body,
         baseVersion: draft.version,
         serverUpdatedAt: draft.updatedAt,
         localUpdatedAt: new Date().toISOString(),
@@ -218,6 +220,7 @@ export default function DraftEditorPage() {
 
       const snapshot = offlineSnapshot ?? readDraftOfflineState(window.localStorage, draft.id);
       if (!snapshot) return;
+      const revisionAtSyncStart = localEditRevisionRef.current;
 
       if (!force && isDraftOfflineConflict(snapshot, { version: draft.version, updatedAt: draft.updatedAt })) {
         setOfflineSyncState("conflict");
@@ -261,15 +264,18 @@ export default function DraftEditorPage() {
 
         const savedDraft = payload as DraftDetail;
         setDraft(savedDraft);
-        setTitle(savedDraft.title);
-        setBody(savedDraft.body);
         setLastSavedAt(savedDraft.updatedAt);
-        setDirty(false);
-        setHasRecovery(false);
-        setOfflineSnapshot(null);
-        setOfflineSyncState("synced");
-        setRestoreMessage("本地暂存内容已同步到服务器。");
-        clearDraftOfflineState(window.localStorage, draft.id);
+        if (localEditRevisionRef.current === revisionAtSyncStart) {
+          localEditRevisionRef.current = 0;
+          setTitle(savedDraft.title);
+          setBody(savedDraft.body);
+          setDirty(false);
+          setHasRecovery(false);
+          setOfflineSnapshot(null);
+          setOfflineSyncState("synced");
+          setRestoreMessage("本地暂存内容已同步到服务器。");
+          clearDraftOfflineState(window.localStorage, draft.id);
+        }
         setStatus("idle");
         void loadVersions(token);
       } catch {
@@ -292,6 +298,7 @@ export default function DraftEditorPage() {
   const saveDraft = useCallback(
     async (reason: "manual" | "auto" = "manual") => {
       if (!token || !draft || status === "saving") return;
+      const revisionAtSaveStart = localEditRevisionRef.current;
 
       if (!navigator.onLine) {
         writeLocalDraftSnapshot("offline");
@@ -321,14 +328,17 @@ export default function DraftEditorPage() {
 
         const savedDraft = payload as DraftDetail;
         setDraft(savedDraft);
-        setTitle(savedDraft.title);
-        setBody(savedDraft.body);
         setLastSavedAt(savedDraft.updatedAt);
-        setDirty(false);
-        setHasRecovery(false);
-        setOfflineSnapshot(null);
-        setOfflineSyncState("idle");
-        clearDraftOfflineState(window.localStorage, draft.id);
+        if (localEditRevisionRef.current === revisionAtSaveStart) {
+          localEditRevisionRef.current = 0;
+          setTitle(savedDraft.title);
+          setBody(savedDraft.body);
+          setDirty(false);
+          setHasRecovery(false);
+          setOfflineSnapshot(null);
+          setOfflineSyncState("idle");
+          clearDraftOfflineState(window.localStorage, draft.id);
+        }
         setStatus("idle");
         void loadVersions(token);
       } catch {
@@ -337,7 +347,7 @@ export default function DraftEditorPage() {
         setStatus("idle");
       }
     },
-    [draft, loadVersions, status, title, token, writeLocalDraftSnapshot],
+    [body, draft, loadVersions, status, title, token, writeLocalDraftSnapshot],
   );
 
   useEffect(() => {
@@ -362,21 +372,25 @@ export default function DraftEditorPage() {
 
   useEffect(() => {
     if (!dirty || status === "saving" || restoringVersionId) return;
-    const timer = window.setInterval(() => {
+    const timer = window.setTimeout(() => {
       void saveDraft("auto");
-    }, 30000);
+    }, 1500);
 
-    return () => window.clearInterval(timer);
+    return () => window.clearTimeout(timer);
   }, [dirty, restoringVersionId, saveDraft, status]);
 
   function updateTitle(nextTitle: string) {
+    localEditRevisionRef.current += 1;
     setTitle(nextTitle);
     setDirty(true);
+    writeLocalDraftSnapshot("local_edit", { title: nextTitle });
   }
 
   function updateBody(nextBody: RichTextDocument) {
+    localEditRevisionRef.current += 1;
     setBody(nextBody);
     setDirty(true);
+    writeLocalDraftSnapshot("local_edit", { body: nextBody });
   }
 
   function replaceDraftBody(text: string) {
@@ -420,6 +434,7 @@ export default function DraftEditorPage() {
     const payload = readDraftOfflineState(window.localStorage, draftId);
     if (!payload) return;
 
+    localEditRevisionRef.current += 1;
     setTitle(payload.title);
     setBody(payload.body);
     setDirty(true);
@@ -469,6 +484,7 @@ export default function DraftEditorPage() {
     }
 
     const restoredDraft = payload as RestoreDraftVersionResponse;
+    localEditRevisionRef.current = 0;
     setDraft(restoredDraft);
     setTitle(restoredDraft.title);
     setBody(restoredDraft.body);
@@ -483,16 +499,22 @@ export default function DraftEditorPage() {
   }
 
   function appendAssistantSuggestion() {
-    setBody((current) => ({
-      ...current,
-      content: [
-        ...current.content,
-        {
-          type: "paragraph",
-          content: [{ type: "text", text: assistantSuggestion }],
-        },
-      ],
-    }));
+    localEditRevisionRef.current += 1;
+    setBody((current) => {
+      const nextBody = {
+        ...current,
+        content: [
+          ...current.content,
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: assistantSuggestion }],
+          },
+        ],
+      };
+
+      writeLocalDraftSnapshot("local_edit", { body: nextBody });
+      return nextBody;
+    });
     setDirty(true);
   }
 
