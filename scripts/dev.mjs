@@ -209,11 +209,31 @@ function spawnPnpm(label, args, env) {
   return child;
 }
 
-function stopChildren(children) {
+export function stopProcessTree(child, { platform = process.platform, spawnProcess = spawn } = {}) {
+  if (!child || child.killed) {
+    return;
+  }
+
+  if (platform === "win32" && child.pid) {
+    const killer = spawnProcess("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+
+    killer.once("error", () => {
+      if (!child.killed) {
+        child.kill();
+      }
+    });
+    return;
+  }
+
+  child.kill();
+}
+
+export function stopChildren(children, options) {
   for (const child of children) {
-    if (!child.killed) {
-      child.kill();
-    }
+    stopProcessTree(child, options);
   }
 }
 

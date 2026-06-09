@@ -26,6 +26,7 @@ interface PromptManagerPanelProps {
   prompts: PromptTemplateSummary[];
   promptsLoading: boolean;
   selectedPromptId: string;
+  category?: string;
   onSelectPrompt: (promptId: string) => void;
   onPromptSaved: (prompt: PromptTemplateDetail) => void;
   onPromptDeleted: (promptId: string) => void;
@@ -45,6 +46,7 @@ export function PromptManagerPanel({
   prompts,
   promptsLoading,
   selectedPromptId,
+  category = "article_generation",
   onSelectPrompt,
   onPromptSaved,
   onPromptDeleted,
@@ -57,7 +59,7 @@ export function PromptManagerPanel({
         {
           id: "",
           name: "默认生成模板",
-          category: "article_generation",
+          category,
           owner: PromptOwner.Platform,
           isStarter: true,
           description: "使用后端默认 Prompt",
@@ -148,7 +150,7 @@ export function PromptManagerPanel({
       authToken,
       body: JSON.stringify({
         name: editor.draft.name,
-        category: "article_generation",
+        category,
         description: editor.draft.description,
         userTemplate: editor.draft.userTemplate,
       }),

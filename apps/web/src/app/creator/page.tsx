@@ -69,6 +69,7 @@ export default function CreatorHomePage() {
   const [pendingDeleteDraftId, setPendingDeleteDraftId] = useState("");
   const [withdrawingArticleId, setWithdrawingArticleId] = useState("");
   const [deletingDraftId, setDeletingDraftId] = useState("");
+  const [creationOpen, setCreationOpen] = useState(true);
   const [managementOpen, setManagementOpen] = useState(true);
 
   useEffect(() => {
@@ -282,9 +283,24 @@ export default function CreatorHomePage() {
               >
                 主页
               </button>
-              <Link className="rounded-md px-4 py-3 font-semibold text-[#4e5661] hover:bg-[#f6f7f9]" href="/workspace">
-                创作
-              </Link>
+              <button
+                className="flex items-center justify-between rounded-md px-4 py-3 text-left font-semibold text-[#4e5661] hover:bg-[#f6f7f9]"
+                type="button"
+                onClick={() => setCreationOpen((current) => !current)}
+              >
+                <span>创作</span>
+                <span className="text-[#a8adb5]">{creationOpen ? "收起" : "展开"}</span>
+              </button>
+              {creationOpen ? (
+                <div className="ml-3 grid gap-1 border-l border-[#eeeeee] pl-3 text-sm">
+                  <Link className="rounded-md px-3 py-2 text-[#4e5661] hover:bg-[#f6f7f9]" href="/workspace">
+                    文章工作台
+                  </Link>
+                  <Link className="rounded-md px-3 py-2 text-[#4e5661] hover:bg-[#f6f7f9]" href="/multimodal-workspace">
+                    多模态生成
+                  </Link>
+                </div>
+              ) : null}
               <button
                 className="flex items-center justify-between rounded-md px-4 py-3 text-left font-semibold text-[#4e5661] hover:bg-[#f6f7f9]"
                 type="button"

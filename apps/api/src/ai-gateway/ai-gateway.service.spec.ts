@@ -73,6 +73,24 @@ function createStreamingProvider(
   };
 }
 
+function createMultimodalProvider(content: string) {
+  const calls: ProviderCall[] = [];
+  const imageCalls: Array<{ model: string; prompt: string }> = [];
+
+  return {
+    calls,
+    imageCalls,
+    complete: async (input: ProviderCall) => {
+      calls.push(input);
+      return { model: "live-text-model", content };
+    },
+    generateImage: async (input: { model: string; prompt: string }) => {
+      imageCalls.push(input);
+      return { model: input.model, url: `https://example.test/generated-${imageCalls.length}.png` };
+    },
+  };
+}
+
 function createRequestLogger() {
   const logs: AiRequestLogPayload[] = [];
 
@@ -310,6 +328,93 @@ describe("AiGatewayService", () => {
     assert.equal(events[0].data.model, "mock-model");
     assert.ok("text" in events[1].data);
     assert.ok("body" in events.at(-1)!.data);
+  });
+
+  it("streams mock multimodal generation with image status events", async () => {
+    const service = new ServiceCtor(
+      createConfig({
+        AI_PROVIDER_MODE: "mock",
+        AI_MODEL: "mock-model",
+      }),
+      createPromptsService(),
+      createProvider("{}"),
+    );
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    for await (const event of service.streamMultimodalDraft(
+      { ...generationInput, imagePrompt: "绘制一张通货膨胀信息图", imageCount: 2 },
+      "user-1",
+    )) {
+      events.push(event);
+    }
+
+    assert.deepEqual(
+      events.map((event) => event.event),
+      [
+        "meta",
+        "title",
+        "outline",
+        "body-delta",
+        "body-delta",
+        "image-plan",
+        "image-status",
+        "image",
+        "image-status",
+        "image",
+        "done",
+      ],
+    );
+    assert.equal(events[0].data.imageModel, "doubao-seedream-4-5-251128");
+    assert.equal((events[6].data as { status: string }).status, "generating");
+    assert.match(
+      (((events[5].data as { images: Array<{ prompt: string }> }).images)[0]).prompt,
+      /通货膨胀信息图/,
+    );
+    assert.equal((events.at(-1)!.data.images as unknown[]).length, 2);
+  });
+
+  it("uses the live provider to plan multimodal content and call the image model", async () => {
+    const provider = createMultimodalProvider(
+      JSON.stringify({
+        title: "上海租界掠影",
+        outline: ["历史背景", "城市遗存"],
+        bodyText: "上海租界见证了近代城市空间的变化。\\n\\n今天仍可在街区中看到建筑遗存。",
+        images: [
+          {
+            prompt: "近代上海外滩租界街景，历史建筑，写实风格",
+            caption: "外滩一带保留了许多租界时期建筑",
+            alt: "上海外滩租界建筑",
+          },
+        ],
+      }),
+    );
+    const service = new ServiceCtor(
+      createConfig({
+        AI_PROVIDER_MODE: "live",
+        AI_API_KEY: "test-key",
+        AI_MODEL: "test-model",
+        AI_BASE_URL: "https://example.test/api/v3",
+        AI_IMAGE_MODEL: "doubao-seedream-4-5-251128",
+      }),
+      createPromptsService(),
+      provider,
+    );
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    for await (const event of service.streamMultimodalDraft(
+      { ...generationInput, imagePrompt: "绘制租界街景信息图", imageCount: 1 },
+      "user-1",
+    )) {
+      events.push(event);
+    }
+
+    assert.equal(provider.calls.length, 1);
+    assert.match(provider.calls[0].messages[1].content, /Image prompt template/);
+    assert.equal(provider.imageCalls.length, 1);
+    assert.equal(provider.imageCalls[0].model, "doubao-seedream-4-5-251128");
+    assert.match(provider.imageCalls[0].prompt, /外滩租界街景/);
+    assert.equal(events.some((event) => event.event === "image"), true);
+    assert.equal((events.at(-1)!.data.images as Array<{ status: string }>)[0].status, "completed");
   });
 
   it("streams mock title candidates one by one", async () => {

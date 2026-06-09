@@ -4,6 +4,8 @@ import type { AiTokenUsage } from "./doubao-chat-format";
 
 export type AiRequestFeature =
   | "article_generation"
+  | "multimodal_generation"
+  | "image_generation"
   | "title_optimization"
   | "article_rewrite"
   | "compliance_rewrite"

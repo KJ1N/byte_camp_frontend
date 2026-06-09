@@ -37,6 +37,24 @@ const blockBody: RichTextDocument = {
   ],
 };
 
+const imageBody: RichTextDocument = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "上海租界短图文正文。" }],
+    },
+    {
+      type: "image",
+      attrs: {
+        src: "https://example.test/shanghai.png",
+        alt: "上海外滩租界建筑",
+        title: "外滩一带保留了许多租界时期建筑",
+      },
+    },
+  ],
+};
+
 function createDraft(body: RichTextDocument, title = "AI 如何改变内容创作") {
   return {
     id: "draft-1",
@@ -106,6 +124,7 @@ function createService(
   let inTransaction = false;
   const calls = {
     auditRecords: [] as Array<{ decision: AuditDecision }>,
+    auditRecordStages: [] as string[],
     auditRecordArticleLinks: [] as Array<{ id: string; articleId: string }>,
     qualityScores: [] as Array<{ overall: number }>,
     qualityScoreArticleLinks: [] as Array<{ id: string; articleId: string }>,
@@ -140,8 +159,9 @@ function createService(
       },
     },
     auditRecord: {
-      create: async ({ data }: { data: { decision: AuditDecision } }) => {
+      create: async ({ data }: { data: { decision: AuditDecision; stage?: string } }) => {
         calls.auditRecords.push({ decision: data.decision });
+        if (data.stage) calls.auditRecordStages.push(data.stage);
         return {
           id: `audit-${calls.auditRecords.length}`,
           createdAt: new Date("2026-06-04T10:00:00.000Z"),
@@ -422,6 +442,20 @@ describe("PublishService", () => {
     assert.equal(result.recordId, "audit-1");
     assert.deepEqual(calls.auditRecords, [{ decision: AuditDecision.Warn }]);
     assert.equal(calls.articles.length, 0);
+  });
+
+  it("splits text and image audit records before returning the aggregate result", async () => {
+    const { service, calls } = createService(imageBody);
+
+    const result = await service.checkDraft("user-1", "draft-1");
+
+    assert.equal(result.result.decision, AuditDecision.Pass);
+    assert.deepEqual(calls.auditRecordStages, [
+      "PUBLISH_PRECHECK_TEXT",
+      "PUBLISH_PRECHECK_IMAGE",
+      "PUBLISH_PRECHECK",
+    ]);
+    assert.equal(calls.auditRecords.length, 3);
   });
 
   it("scores a draft and persists the quality score", async () => {

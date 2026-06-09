@@ -92,6 +92,42 @@ describe("AiProviderClient", () => {
     });
   });
 
+  it("sends image generation requests to the Ark images generations API", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const client = new ClientCtor(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          model: "doubao-seedream-4-5-251128",
+          data: [{ url: "https://example.test/image.png" }],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const response = await client.generateImage({
+      apiKey: "test-key",
+      model: "doubao-seedream-4-5-251128",
+      prompt: "绘制一张信息图",
+      timeoutMs: 12_000,
+      maxRetries: 0,
+    });
+
+    assert.deepEqual(response, {
+      model: "doubao-seedream-4-5-251128",
+      url: "https://example.test/image.png",
+    });
+    assert.equal(calls[0].url, "https://ark.cn-beijing.volces.com/api/v3/images/generations");
+    assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+      model: "doubao-seedream-4-5-251128",
+      prompt: "绘制一张信息图",
+      sequential_image_generation: "disabled",
+      response_format: "url",
+      size: "2K",
+      stream: false,
+    });
+  });
+
   it("returns token usage when the provider stream includes usage chunks", async () => {
     const client = new ClientCtor(async () => {
       return new Response(

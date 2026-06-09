@@ -1,10 +1,12 @@
-import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Injectable, NotFoundException, Optional } from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
 import {
   ArticleStatus,
   AuditDecision,
+  AssetAuditStatus,
   DraftStatus,
   EngagementEventType,
+  RiskCategory,
   richTextToPlainText,
   type AuditCheckResponse,
   type ArticleDetail,
@@ -13,14 +15,29 @@ import {
   type PublishArticleResponse,
   type QualityScore,
   type RichTextDocument,
+  type RichTextNode,
   type ScoringArticleResponse,
   type WithdrawArticleResponse,
 } from "@bytecamp-aigc/shared";
+import { AssetAuditService } from "../assets/asset-audit.service";
 import { AuditService } from "../audit/audit.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { RankingCacheService } from "../ranking/ranking-cache.service";
 import { RankingService } from "../ranking/ranking.service";
 import { ScoringService } from "../scoring/scoring.service";
+
+interface DraftAuditBundle {
+  aggregate: AuditResult;
+  text: AuditResult;
+  images: AuditResult[];
+}
+
+interface DraftImageAuditTarget {
+  src: string;
+  alt?: string;
+  caption?: string;
+  prompt?: string;
+}
 
 @Injectable()
 export class PublishService {
@@ -30,14 +47,15 @@ export class PublishService {
     private readonly scoringService: ScoringService,
     private readonly rankingService: RankingService = new RankingService(),
     private readonly rankingCacheService?: RankingCacheService,
+    @Optional() private readonly assetAuditService?: AssetAuditService,
   ) {}
 
   async checkDraft(authorId: string, draftId: string): Promise<AuditCheckResponse> {
-    const { draft, text } = await this.loadDraftText(this.prisma, authorId, draftId);
-    const result = await this.auditService.checkText(`${draft.title}\n${text}`);
+    const { draft, body, text } = await this.loadDraftText(this.prisma, authorId, draftId);
+    const auditBundle = await this.auditDraftContent(draft.title, body, text);
 
     return this.prisma.$transaction(async (tx) => {
-      return this.createAuditRecord(tx, draft.id, result);
+      return this.createAuditRecords(tx, draft.id, auditBundle);
     });
   }
 
@@ -125,7 +143,8 @@ export class PublishService {
 
   async publishDraft(authorId: string, draftId: string): Promise<PublishArticleResponse> {
     const { draft, body, text } = await this.loadDraftText(this.prisma, authorId, draftId);
-    const auditResult = await this.auditService.checkText(`${draft.title}\n${text}`);
+    const auditBundle = await this.auditDraftContent(draft.title, body, text);
+    const auditResult = auditBundle.aggregate;
     const scoreResult = await this.scoringService.scoreArticle({
       title: draft.title,
       text,
@@ -135,7 +154,7 @@ export class PublishService {
     const result = await this.prisma.$transaction<PublishArticleResponse>(async (tx) => {
       await this.assertDraftUnchanged(tx, draft.id, draft.version);
 
-      const audit = await this.createAuditRecord(tx, draft.id, auditResult);
+      const audit = await this.createAuditRecords(tx, draft.id, auditBundle);
       const score = await this.createQualityScore(tx, draft.id, scoreResult);
 
       if (auditResult.decision === AuditDecision.Block) {
@@ -273,6 +292,158 @@ export class PublishService {
     };
   }
 
+  private async auditDraftContent(title: string, body: RichTextDocument, text: string): Promise<DraftAuditBundle> {
+    const textResult = await this.auditService.checkText(`${title}\n${text}`);
+    const imageTargets = this.extractImageAuditTargets(body);
+    const imageResults = await Promise.all(
+      imageTargets.map((target, index) => this.auditImageTarget(target, index)),
+    );
+
+    return {
+      text: textResult,
+      images: imageResults,
+      aggregate: this.aggregateAuditResults(textResult, imageResults),
+    };
+  }
+
+  private async auditImageTarget(target: DraftImageAuditTarget, index: number): Promise<AuditResult> {
+    if (!target.src) {
+      return this.createImageAuditWarn(index, "图片节点缺少地址，无法完成图片审核。");
+    }
+
+    try {
+      if (this.assetAuditService) {
+        return this.assetAuditToAuditResult(
+          await this.assetAuditService.auditGeneratedImage({
+            url: target.src,
+            alt: target.alt,
+            caption: target.caption,
+            prompt: target.prompt,
+          }),
+          index,
+        );
+      }
+
+      return this.auditService.checkText(
+        [`图片 ${index + 1}`, target.alt, target.caption, target.prompt, target.src].filter(Boolean).join("\n"),
+      );
+    } catch (error) {
+      return this.createImageAuditWarn(
+        index,
+        error instanceof Error ? error.message : "图片审核失败，请重试后再发布。",
+      );
+    }
+  }
+
+  private aggregateAuditResults(textResult: AuditResult, imageResults: AuditResult[]): AuditResult {
+    const results = [textResult, ...imageResults];
+    const decision = this.aggregateDecision(results);
+
+    if (decision === AuditDecision.Pass) {
+      return {
+        decision,
+        riskLevel: "none",
+        categories: [],
+        evidence: [],
+        rewriteSuggestions: [],
+        summary: "文字和图片均未发现明显风险。",
+        source: this.aggregateSource(results),
+      };
+    }
+
+    return {
+      decision,
+      riskLevel: results.some((result) => result.riskLevel === "high") ? "high" : "medium",
+      categories: [...new Set(results.flatMap((result) => result.categories))],
+      evidence: results.flatMap((result) => result.evidence),
+      rewriteSuggestions: [...new Set(results.flatMap((result) => result.rewriteSuggestions))],
+      summary:
+        decision === AuditDecision.Block
+          ? "文字或图片命中高风险规则，已阻止发布。"
+          : "文字或图片存在中风险，需要修改后重新审核。",
+      source: this.aggregateSource(results),
+    };
+  }
+
+  private aggregateDecision(results: AuditResult[]) {
+    if (results.some((result) => result.decision === AuditDecision.Block)) return AuditDecision.Block;
+    if (results.some((result) => result.decision === AuditDecision.Warn)) return AuditDecision.Warn;
+    return AuditDecision.Pass;
+  }
+
+  private aggregateSource(results: AuditResult[]): AuditResult["source"] {
+    return results.some((result) => result.source === "MODEL") ? "MODEL" : "MOCK";
+  }
+
+  private assetAuditToAuditResult(
+    result: Awaited<ReturnType<AssetAuditService["auditGeneratedImage"]>>,
+    index: number,
+  ): AuditResult {
+    const decision =
+      result.decision === AssetAuditStatus.Blocked
+        ? AuditDecision.Block
+        : result.decision === AssetAuditStatus.Warn
+          ? AuditDecision.Warn
+          : AuditDecision.Pass;
+
+    return {
+      decision,
+      riskLevel: result.riskLevel,
+      categories: result.categories,
+      evidence: result.evidence.map((item) => ({
+        text: item.text || `图片 ${index + 1}`,
+        reason: item.reason || "图片审核命中风险。",
+      })),
+      rewriteSuggestions:
+        decision === AuditDecision.Pass ? [] : [`请替换或重新生成第 ${index + 1} 张图片。`],
+      summary: `第 ${index + 1} 张图片审核: ${result.summary}`,
+      model: result.model,
+      source: result.source,
+    };
+  }
+
+  private createImageAuditWarn(index: number, reason: string): AuditResult {
+    return {
+      decision: AuditDecision.Warn,
+      riskLevel: "medium",
+      categories: [RiskCategory.LowQuality],
+      evidence: [{ text: `图片 ${index + 1}`, reason }],
+      rewriteSuggestions: [`请重新生成或移除第 ${index + 1} 张图片。`],
+      summary: `第 ${index + 1} 张图片审核未完成，需要处理后再发布。`,
+      source: "MOCK",
+    };
+  }
+
+  private extractImageAuditTargets(body: RichTextDocument): DraftImageAuditTarget[] {
+    const targets: DraftImageAuditTarget[] = [];
+
+    for (const node of body.content) {
+      this.collectImageAuditTargets(node, targets);
+    }
+
+    return targets;
+  }
+
+  private collectImageAuditTargets(node: RichTextNode, targets: DraftImageAuditTarget[]) {
+    if (node.type === "image") {
+      targets.push({
+        src: this.readNodeAttr(node, "src") ?? "",
+        alt: this.readNodeAttr(node, "alt"),
+        caption: this.readNodeAttr(node, "title"),
+        prompt: this.readNodeAttr(node, "prompt"),
+      });
+    }
+
+    for (const child of node.content ?? []) {
+      this.collectImageAuditTargets(child, targets);
+    }
+  }
+
+  private readNodeAttr(node: RichTextNode, key: string) {
+    const value = node.attrs?.[key];
+    return typeof value === "string" ? value.trim() : undefined;
+  }
+
   private async loadDraftText(db: Pick<Prisma.TransactionClient, "draft">, authorId: string, draftId: string) {
     const draft = await db.draft.findFirst({
       where: { id: draftId, authorId },
@@ -299,15 +470,34 @@ export class PublishService {
     }
   }
 
+  private async createAuditRecords(
+    tx: Prisma.TransactionClient,
+    draftId: string,
+    bundle: DraftAuditBundle,
+  ): Promise<AuditCheckResponse> {
+    if (!bundle.images.length) {
+      return this.createAuditRecord(tx, draftId, bundle.aggregate, "PUBLISH_PRECHECK");
+    }
+
+    await this.createAuditRecord(tx, draftId, bundle.text, "PUBLISH_PRECHECK_TEXT");
+
+    for (const imageResult of bundle.images) {
+      await this.createAuditRecord(tx, draftId, imageResult, "PUBLISH_PRECHECK_IMAGE");
+    }
+
+    return this.createAuditRecord(tx, draftId, bundle.aggregate, "PUBLISH_PRECHECK");
+  }
+
   private async createAuditRecord(
     tx: Prisma.TransactionClient,
     draftId: string,
     result: AuditResult,
+    stage: string,
   ): Promise<AuditCheckResponse> {
     const record = await tx.auditRecord.create({
       data: {
         draftId,
-        stage: "PUBLISH_PRECHECK",
+        stage,
         decision: result.decision,
         riskLevel: result.riskLevel,
         categories: result.categories,

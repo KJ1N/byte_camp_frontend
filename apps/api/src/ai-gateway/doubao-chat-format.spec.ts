@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   buildDoubaoChatCompletionsBody,
   getDoubaoChatCompletionsUrl,
+  getDoubaoImageGenerationsUrl,
   parseDoubaoStreamEvent,
   parseDoubaoStreamResult,
   parseDoubaoStreamText,
@@ -20,6 +21,13 @@ describe("doubao chat format", () => {
     assert.equal(
       getDoubaoChatCompletionsUrl("https://ark.cn-beijing.volces.com/api/v3/chat/completions"),
       "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+    );
+  });
+
+  it("uses the Ark images generations API as the default image endpoint", () => {
+    assert.equal(
+      getDoubaoImageGenerationsUrl(),
+      "https://ark.cn-beijing.volces.com/api/v3/images/generations",
     );
   });
 

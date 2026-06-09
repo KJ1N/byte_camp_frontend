@@ -1,9 +1,16 @@
-import { PrismaClient } from "@prisma/client";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadRootEnv } from "./e2e-env.mjs";
 
 const prefix = "e2e-ranking-lcp";
 const userId = `${prefix}-user`;
 const userEmail = `${prefix}@bytecamp.local`;
 const defaultDatabaseName = "bytecamp_aigc";
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const apiRequire = createRequire(path.join(rootDir, "apps/api/package.json"));
+const { PrismaClient } = apiRequire("@prisma/client");
+const loadedEnv = loadRootEnv(rootDir);
 
 function normalizeUrl(value) {
   return value ? value.trim().replace(/\/+$/, "") : "";
@@ -17,7 +24,7 @@ function databaseName(value) {
   }
 }
 
-function requireE2eDatabaseUrl(env = process.env) {
+function requireE2eDatabaseUrl(env = loadedEnv) {
   const e2eDatabaseUrl = normalizeUrl(env.E2E_DATABASE_URL);
   if (!e2eDatabaseUrl) {
     throw new Error("E2E_DATABASE_URL is required before seeding rankings performance data.");
@@ -53,8 +60,8 @@ function rankDate(index) {
 }
 
 async function main() {
-  const e2eDatabaseUrl = requireE2eDatabaseUrl();
-  const articleCount = Number.parseInt(process.env.E2E_RANKING_ARTICLE_COUNT ?? "24", 10);
+  const e2eDatabaseUrl = requireE2eDatabaseUrl(loadedEnv);
+  const articleCount = Number.parseInt(loadedEnv.E2E_RANKING_ARTICLE_COUNT ?? "24", 10);
   const total = Number.isFinite(articleCount) ? Math.max(articleCount, 12) : 24;
   const prisma = new PrismaClient({
     datasources: {
@@ -75,7 +82,7 @@ async function main() {
       data: {
         id: userId,
         email: userEmail,
-        nickname: "E2E 榜单测试创作者",
+        nickname: "E2E Ranking Test Author",
         passwordHash: "e2e-not-used",
       },
     });
@@ -88,13 +95,15 @@ async function main() {
       const views = 900 - index * 13;
       const likes = 60 - (index % 11);
       const favorites = 28 - (index % 7);
-      const body = richTextDoc(`这是第 ${index} 篇 E2E 榜单性能测试文章，用于验证首屏 LCP 和滚动分页。`);
+      const body = richTextDoc(
+        `This is E2E ranking performance article ${index}, used only for first-screen LCP and infinite-scroll checks.`,
+      );
 
       await prisma.draft.create({
         data: {
           id: draftId,
           authorId: userId,
-          title: `E2E 榜单性能测试文章 ${padded}`,
+          title: `E2E Ranking Performance Article ${padded}`,
           status: "PUBLISHED",
           body,
         },
@@ -105,8 +114,8 @@ async function main() {
           id: articleId,
           authorId: userId,
           draftId,
-          title: `E2E 榜单性能测试文章 ${padded}`,
-          summary: `专用于 E2E 测试库的榜单首屏和滚动加载测试数据 ${padded}。`,
+          title: `E2E Ranking Performance Article ${padded}`,
+          summary: `Dedicated E2E database ranking seed article ${padded}.`,
           body,
           publishedAt: rankDate(index),
         },
@@ -123,8 +132,8 @@ async function main() {
           spreadPotential: score - 3,
           safetyScore: 95,
           overall: score,
-          reasons: ["E2E 测试数据"],
-          suggestions: ["仅用于测试库"],
+          reasons: ["E2E test data"],
+          suggestions: ["Use only in the dedicated E2E database"],
         },
       });
 

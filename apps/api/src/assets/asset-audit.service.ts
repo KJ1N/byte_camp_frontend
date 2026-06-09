@@ -26,6 +26,35 @@ export class AssetAuditService {
     return this.auditLiveImage(input);
   }
 
+  async auditGeneratedImage(input: {
+    url: string;
+    alt?: string;
+    caption?: string;
+    prompt?: string;
+  }): Promise<AssetAuditResult> {
+    const riskText = [input.url, input.alt, input.caption, input.prompt].filter(Boolean).join(" ");
+    const filenameRisk = this.findFilenameRisk(riskText);
+    if (filenameRisk) return filenameRisk;
+
+    if (!/^https?:\/\//i.test(input.url)) {
+      return {
+        decision: AssetAuditStatus.Warn,
+        riskLevel: "medium",
+        categories: [RiskCategory.LowQuality],
+        evidence: [{ text: input.url || "空图片地址", reason: "生成图片缺少可审核的 http/https 地址。" }],
+        summary: "生成图片地址不可用，需要重新生成或移除后再发布。",
+        model: "vision-audit-rules",
+        source: "MOCK",
+      };
+    }
+
+    const mode = this.getMode();
+    if (mode === "mock") return this.auditMockGeneratedImage(input);
+    if (mode === "auto" && !this.hasLiveConfig()) return this.auditMockGeneratedImage(input);
+
+    return this.auditLiveImageUrl(input);
+  }
+
   private auditMockImage(filename: string): AssetAuditResult {
     if (/block/i.test(filename)) {
       return {
@@ -57,6 +86,39 @@ export class AssetAuditService {
       categories: [],
       evidence: [],
       summary: "视觉审核通过。",
+      model: "vision-audit-mock",
+      source: "MOCK",
+    };
+  }
+
+  private auditMockGeneratedImage(input: {
+    url: string;
+    alt?: string;
+    caption?: string;
+    prompt?: string;
+  }): AssetAuditResult {
+    const text = [input.alt, input.caption, input.prompt, input.url].filter(Boolean).join(" ");
+    const risk = this.findFilenameRisk(text);
+    if (risk) return risk;
+
+    if (/warn/i.test(text)) {
+      return {
+        decision: AssetAuditStatus.Warn,
+        riskLevel: "medium",
+        categories: [RiskCategory.LowQuality],
+        evidence: [{ text, reason: "mock 视觉审核命中 warn 描述。" }],
+        summary: "生成图片存在中低风险，建议确认后发布。",
+        model: "vision-audit-mock",
+        source: "MOCK",
+      };
+    }
+
+    return {
+      decision: AssetAuditStatus.Passed,
+      riskLevel: "none",
+      categories: [],
+      evidence: [],
+      summary: "生成图片审核通过。",
       model: "vision-audit-mock",
       source: "MOCK",
     };
@@ -110,6 +172,63 @@ export class AssetAuditService {
               {
                 type: "image_url",
                 image_url: { url: `data:${input.mimeType};base64,${input.buffer.toString("base64")}` },
+              },
+            ],
+          },
+        ],
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new BadGatewayException("视觉审核模型调用失败。");
+    }
+
+    const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }>; model?: string };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) throw new BadGatewayException("视觉审核模型返回为空。");
+
+    return this.parseLiveAudit(content, payload.model ?? model);
+  }
+
+  private async auditLiveImageUrl(input: {
+    url: string;
+    alt?: string;
+    caption?: string;
+    prompt?: string;
+  }): Promise<AssetAuditResult> {
+    const apiKey = this.readConfig("AI_API_KEY");
+    const baseUrl = this.getLiveAuditUrl();
+    const model = this.getLiveAuditModel();
+
+    if (!apiKey || !model || this.isPlaceholder(apiKey) || this.isPlaceholder(model)) {
+      throw new ServiceUnavailableException("视觉审核模型未配置。");
+    }
+
+    const response = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是内容安全视觉审核模型。只返回 JSON，字段为 decision(PASSED/WARN/BLOCKED)、riskLevel、categories、evidence、summary。",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `审核生成图片。alt: ${input.alt ?? ""}\ncaption: ${input.caption ?? ""}\nprompt: ${input.prompt ?? ""}`,
+              },
+              {
+                type: "image_url",
+                image_url: { url: input.url },
               },
             ],
           },

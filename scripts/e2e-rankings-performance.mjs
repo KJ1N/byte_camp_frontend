@@ -6,13 +6,16 @@ import {
   createPnpmSpawnCommand,
   resolveDevConfig,
   startDevProcesses,
+  stopChildren,
   waitForHttpOk,
 } from "./dev.mjs";
+import { loadRootEnv } from "./e2e-env.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const e2eWebPort = process.env.E2E_WEB_PORT ?? "3200";
-const e2eApiPort = process.env.E2E_API_PORT ?? "3201";
-const e2eApiBaseUrl = process.env.E2E_API_BASE_URL ?? `http://127.0.0.1:${e2eApiPort}`;
+const loadedEnv = loadRootEnv(rootDir);
+const e2eWebPort = loadedEnv.E2E_WEB_PORT;
+const e2eApiPort = loadedEnv.E2E_API_PORT;
+const e2eApiBaseUrl = loadedEnv.E2E_API_BASE_URL;
 const defaultDatabaseName = "bytecamp_aigc";
 
 function normalizeUrl(value) {
@@ -27,7 +30,7 @@ function databaseName(value) {
   }
 }
 
-function requireE2eDatabaseUrl(env = process.env) {
+function requireE2eDatabaseUrl(env = loadedEnv) {
   const e2eDatabaseUrl = normalizeUrl(env.E2E_DATABASE_URL);
   if (!e2eDatabaseUrl) {
     throw new Error("E2E_DATABASE_URL is required for rankings performance E2E.");
@@ -44,14 +47,6 @@ function requireE2eDatabaseUrl(env = process.env) {
   }
 
   return e2eDatabaseUrl;
-}
-
-function stopChildren(children) {
-  for (const child of children) {
-    if (!child.killed) {
-      child.kill();
-    }
-  }
 }
 
 function runChild(label, file, args, env) {
@@ -84,19 +79,24 @@ function runPnpm(label, pnpmArgs, env) {
   return runChild(label, command.file, command.args, env);
 }
 
+function omitDevServerEnv(env) {
+  const { WEB_PORT, API_PORT, NEXT_PUBLIC_API_BASE_URL, ...rest } = env;
+  return rest;
+}
+
 function playwrightCliPath() {
   return path.join(rootDir, "node_modules", "@playwright", "test", "cli.js");
 }
 
 async function prepareDatabase(e2eDatabaseUrl, regularDatabaseUrl) {
   const migrationEnv = {
-    ...process.env,
+    ...loadedEnv,
     DATABASE_URL: e2eDatabaseUrl,
   };
 
   await runPnpm("Prisma migrate deploy", ["--filter", "@bytecamp-aigc/api", "exec", "prisma", "migrate", "deploy"], migrationEnv);
   await runChild("E2E ranking seed", process.execPath, ["scripts/e2e-ranking-seed.mjs"], {
-    ...process.env,
+    ...loadedEnv,
     DATABASE_URL: regularDatabaseUrl,
     E2E_DATABASE_URL: e2eDatabaseUrl,
   });
@@ -117,15 +117,15 @@ async function runPlaywright(config, env) {
 }
 
 async function main() {
-  const regularDatabaseUrl = normalizeUrl(process.env.DATABASE_URL);
-  const e2eDatabaseUrl = requireE2eDatabaseUrl();
+  const regularDatabaseUrl = normalizeUrl(loadedEnv.DATABASE_URL);
+  const e2eDatabaseUrl = requireE2eDatabaseUrl(loadedEnv);
   await prepareDatabase(e2eDatabaseUrl, regularDatabaseUrl);
 
   const baseEnv = {
-    ...process.env,
-    WEB_PORT: e2eWebPort,
-    API_PORT: e2eApiPort,
-    NEXT_PUBLIC_API_BASE_URL: e2eApiBaseUrl,
+    ...omitDevServerEnv(loadedEnv),
+    ...(e2eWebPort ? { WEB_PORT: e2eWebPort } : {}),
+    ...(e2eApiPort ? { API_PORT: e2eApiPort } : {}),
+    ...(e2eApiBaseUrl ? { NEXT_PUBLIC_API_BASE_URL: e2eApiBaseUrl } : {}),
     DATABASE_URL: e2eDatabaseUrl,
     E2E_DATABASE_URL: e2eDatabaseUrl,
     REDIS_URL: "",

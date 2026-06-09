@@ -6,10 +6,16 @@ import type {
   ComplianceRewriteContext,
   CreatorInspirationsResponse,
   GeneratedArticleDraft,
+  GeneratedImageResult,
+  GeneratedMultimodalDraft,
   GenerateArticleInput,
+  GenerateMultimodalInput,
+  MultimodalImagePlan,
+  MultimodalImageResult,
   OptimizeTitlesInput,
   QualityScore,
   RichTextDocument,
+  RichTextNode,
   RewriteArticleInput,
   RewriteArticleResponse,
 } from "@bytecamp-aigc/shared";
@@ -37,12 +43,16 @@ import {
   buildArticleGenerationMessages,
   buildComplianceRewriteMessages,
   buildContentAuditMessages,
+  buildMultimodalGenerationMessages,
   buildQualityScoringMessages,
   buildRewriteMessages,
   buildTitleOptimizationMessages,
   defaultArticleGenerationPrompt,
+  defaultMultimodalGenerationPrompt,
+  MULTIMODAL_GENERATION_CATEGORY,
   parseAuditJson,
   parseArticleGenerationJson,
+  parseMultimodalGenerationJson,
   parseQualityScoreJson,
   parseRewriteJson,
   parseTitleOptimizationJson,
@@ -127,6 +137,17 @@ interface ProviderConfig {
   model: string;
   timeoutMs: number;
   maxRetries: number;
+}
+
+const defaultImageModel = "doubao-seedream-4-5-251128";
+
+interface MultimodalGenerationPlan {
+  textModel: string;
+  imageModel: string;
+  title: string;
+  outline: string[];
+  bodyText: string;
+  images: MultimodalImagePlan[];
 }
 
 @Injectable()
@@ -296,6 +317,73 @@ export class AiGatewayService {
     }
   }
 
+  async *streamMultimodalDraft(input: GenerateMultimodalInput, userId: string): AsyncGenerator<AiStreamEvent> {
+    const shouldUseLiveProvider = this.shouldUseLiveProvider();
+    const textModel = shouldUseLiveProvider ? this.getConfiguredModelForLog() : this.getMockModel();
+    const imageModel = this.getConfiguredImageModel();
+    const metric = this.createAiRequestMetric(
+      "multimodal_generation",
+      shouldUseLiveProvider ? "live" : "mock",
+      textModel,
+    );
+    let tokenUsage = createEmptyAiTokenUsage();
+
+    try {
+      const plan = shouldUseLiveProvider
+        ? await this.generateLiveMultimodalPlan(input, userId, (usage) => {
+            tokenUsage = mergeAiTokenUsage(tokenUsage, usage);
+          })
+        : this.generateMockMultimodalPlan(input);
+
+      yield { event: "meta", data: { textModel: plan.textModel, imageModel: plan.imageModel } };
+      yield { event: "title", data: { text: plan.title } };
+      yield { event: "outline", data: { items: plan.outline } };
+
+      for (const paragraph of this.paragraphsFromText(plan.bodyText)) {
+        yield { event: "body-delta", data: { text: `${paragraph}\n\n` } };
+      }
+
+      yield { event: "image-plan", data: { images: plan.images } };
+
+      const completedImages: GeneratedImageResult[] = [];
+      const imageResults: MultimodalImageResult[] = [];
+      for (const [index, imagePlan] of plan.images.entries()) {
+        yield { event: "image-status", data: { index, status: "generating" } };
+
+        const image = shouldUseLiveProvider
+          ? await this.generateLiveImageResult(imagePlan, index)
+          : this.generateMockImageResult(imagePlan, index);
+
+        imageResults.push(image);
+
+        if (image.status === "completed") {
+          completedImages.push(image);
+          yield { event: "image", data: image };
+        } else {
+          yield {
+            event: "image-status",
+            data: { index: image.index, status: "failed", message: image.message },
+          };
+        }
+      }
+
+      const finalDraft = {
+        textModel: plan.textModel,
+        imageModel: plan.imageModel,
+        title: plan.title,
+        outline: plan.outline,
+        bodyText: plan.bodyText,
+        images: imageResults,
+        body: this.toMultimodalRichTextDocument(plan.bodyText, completedImages),
+      };
+      yield { event: "done", data: finalDraft as unknown as Record<string, unknown> };
+      this.logAiRequestSuccess(metric, plan.textModel, tokenUsage);
+    } catch (error) {
+      this.logAiRequestError(metric, error, textModel, tokenUsage);
+      throw error;
+    }
+  }
+
   async *streamTitleOptimization(input: OptimizeTitlesInput): AsyncGenerator<AiStreamEvent> {
     const shouldUseLiveProvider = this.shouldUseLiveProvider();
     const metric = this.createAiRequestMetric(
@@ -447,6 +535,98 @@ export class AiGatewayService {
           category: "人机协同",
         },
       ],
+    };
+  }
+
+  private async generateLiveMultimodalPlan(
+    input: GenerateMultimodalInput,
+    userId: string,
+    onTokenUsage?: (usage?: AiTokenUsage) => void,
+  ): Promise<MultimodalGenerationPlan> {
+    const providerConfig = this.getRequiredProviderConfig();
+    const prompt = await this.getMultimodalGenerationPrompt(input.promptId, userId);
+    const completion = await this.getProviderClient().complete({
+      ...providerConfig,
+      messages: buildMultimodalGenerationMessages(input, prompt),
+    });
+    const parsed = parseMultimodalGenerationJson(completion.content, this.normalizeImageCount(input.imageCount));
+    onTokenUsage?.(completion.tokenUsage);
+
+    return {
+      textModel: completion.model,
+      imageModel: this.getConfiguredImageModel(),
+      title: parsed.title,
+      outline: parsed.outline,
+      bodyText: parsed.bodyText,
+      images: parsed.images,
+    };
+  }
+
+  private generateMockMultimodalPlan(input: GenerateMultimodalInput): MultimodalGenerationPlan {
+    const imageCount = this.normalizeImageCount(input.imageCount);
+    const title = `${input.topic}: 图文创作初稿`;
+    const outline = ["主题背景", "核心内容", "配图建议", "发布前检查"];
+    const bodyText = [
+      `${input.topic}适合做成一篇短图文内容。面向${input.audience}, 文章可以先用简洁语言交代背景, 再用配图帮助读者形成直观印象。`,
+      `在${input.style}风格下, 正文需要控制信息密度, 图片则负责补充场景、氛围和细节。`,
+    ].join("\n\n");
+
+    return {
+      textModel: this.getMockModel(),
+      imageModel: this.getConfiguredImageModel(),
+      title,
+      outline,
+      bodyText,
+      images: Array.from({ length: imageCount }, (_, index) => ({
+        prompt: input.imagePrompt?.trim()
+          ? `${input.imagePrompt.trim()} 第 ${index + 1} 张, 与「${input.topic}」主题匹配`
+          : `${input.topic} 相关图文配图 ${index + 1}, 写实风格, 清晰构图, 适合内容发布页`,
+        caption: `${input.topic}配图 ${index + 1}`,
+        alt: `${input.topic}配图 ${index + 1}`,
+      })),
+    };
+  }
+
+  private async generateLiveImageResult(
+    plan: MultimodalImagePlan,
+    index: number,
+  ): Promise<MultimodalImageResult> {
+    const imageMetric = this.createAiRequestMetric("image_generation", "live", this.getConfiguredImageModel());
+
+    try {
+      const completion = await this.getProviderClient().generateImage({
+        ...this.getRequiredImageProviderConfig(),
+        prompt: plan.prompt,
+      });
+      const result: GeneratedImageResult = {
+        ...plan,
+        index,
+        status: "completed",
+        model: completion.model,
+        url: completion.url,
+      };
+
+      this.logAiRequestSuccess(imageMetric, completion.model);
+      return result;
+    } catch (error) {
+      this.logAiRequestError(imageMetric, error, this.getConfiguredImageModel());
+      return {
+        ...plan,
+        index,
+        status: "failed",
+        model: this.getConfiguredImageModel(),
+        message: error instanceof Error ? error.message : "图片生成失败。",
+      };
+    }
+  }
+
+  private generateMockImageResult(plan: MultimodalImagePlan, index: number): GeneratedImageResult {
+    return {
+      ...plan,
+      index,
+      status: "completed",
+      model: this.getConfiguredImageModel(),
+      url: this.createMockImageUrl(plan.caption || plan.alt || `配图 ${index + 1}`),
     };
   }
 
@@ -872,6 +1052,61 @@ export class AiGatewayService {
     };
   }
 
+  private toMultimodalRichTextDocument(bodyText: string, images: GeneratedImageResult[]): RichTextDocument {
+    const content: RichTextNode[] = this.paragraphsFromText(bodyText).map((text) => ({
+      type: "paragraph",
+      content: [{ type: "text", text }],
+    }));
+
+    const validImages = images.filter((image) => /^https?:\/\//i.test(image.url));
+    if (!validImages.length) {
+      return {
+        type: "doc",
+        content: content.length ? content : [{ type: "paragraph", content: [] }],
+      };
+    }
+
+    const baseContent = content.length ? content : [{ type: "paragraph", content: [] }];
+    const output: RichTextNode[] = [];
+    const insertIndexes = this.getImageInsertIndexes(baseContent.length, validImages.length);
+    let imageCursor = 0;
+
+    for (const [index, node] of baseContent.entries()) {
+      output.push(node);
+
+      while (insertIndexes[imageCursor] === index) {
+        const image = validImages[imageCursor];
+        output.push({
+          type: "image",
+          attrs: {
+            src: image.url,
+            alt: image.alt,
+            title: image.caption,
+          },
+        });
+        if (image.caption.trim()) {
+          output.push({
+            type: "paragraph",
+            content: [{ type: "text", text: `图 ${image.index + 1}: ${image.caption.trim()}` }],
+          });
+        }
+        imageCursor += 1;
+      }
+    }
+
+    return {
+      type: "doc",
+      content: output,
+    };
+  }
+
+  private getImageInsertIndexes(paragraphCount: number, imageCount: number) {
+    return Array.from({ length: imageCount }, (_, imageIndex) => {
+      const ratio = (imageIndex + 1) / (imageCount + 1);
+      return Math.max(0, Math.min(paragraphCount - 1, Math.floor(ratio * paragraphCount)));
+    });
+  }
+
   private async getArticleGenerationPrompt(promptId: string | undefined, userId: string | undefined): Promise<ArticleGenerationPrompt> {
     if (promptId) {
       if (!userId || !this.promptsService) {
@@ -883,6 +1118,23 @@ export class AiGatewayService {
     return (
       (await this.promptsService?.getStarterPrompt(ARTICLE_GENERATION_CATEGORY)) ??
       defaultArticleGenerationPrompt
+    );
+  }
+
+  private async getMultimodalGenerationPrompt(
+    promptId: string | undefined,
+    userId: string | undefined,
+  ): Promise<ArticleGenerationPrompt> {
+    if (promptId) {
+      if (!userId || !this.promptsService) {
+        throw new BadRequestException("Prompt template cannot be used");
+      }
+      return this.promptsService.getUsablePrompt(promptId, userId, MULTIMODAL_GENERATION_CATEGORY);
+    }
+
+    return (
+      (await this.promptsService?.getStarterPrompt(MULTIMODAL_GENERATION_CATEGORY)) ??
+      defaultMultimodalGenerationPrompt
     );
   }
 
@@ -912,6 +1164,24 @@ export class AiGatewayService {
     };
   }
 
+  private getRequiredImageProviderConfig(): ProviderConfig & { size: string } {
+    const apiKey = this.readConfig("AI_API_KEY");
+    const model = this.getConfiguredImageModel();
+
+    if (!apiKey || this.isPlaceholder(apiKey) || this.isPlaceholder(model)) {
+      throw new AiProviderConfigurationException();
+    }
+
+    return {
+      apiKey,
+      baseUrl: this.optionalConfig("AI_IMAGE_BASE_URL"),
+      model,
+      timeoutMs: this.readPositiveInt("AI_IMAGE_TIMEOUT_MS", 120_000),
+      maxRetries: this.readNonNegativeInt("AI_IMAGE_MAX_RETRIES", 1),
+      size: this.readConfig("AI_IMAGE_SIZE") ?? "2K",
+    };
+  }
+
   private hasUsableLiveConfig() {
     return !this.isPlaceholder(this.readConfig("AI_API_KEY")) && !this.isPlaceholder(this.readConfig("AI_MODEL"));
   }
@@ -934,6 +1204,21 @@ export class AiGatewayService {
     const configuredModel = this.readConfig("AI_MODEL");
     if (this.isPlaceholder(configuredModel)) return "mock-model";
     return configuredModel ?? "mock-model";
+  }
+
+  private getConfiguredImageModel() {
+    const configuredModel = this.readConfig("AI_IMAGE_MODEL");
+    if (this.isPlaceholder(configuredModel)) return defaultImageModel;
+    return configuredModel ?? defaultImageModel;
+  }
+
+  private normalizeImageCount(value: number | undefined) {
+    const parsed = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 2;
+    return Math.max(1, Math.min(4, parsed));
+  }
+
+  private createMockImageUrl(label: string) {
+    return `https://placehold.co/960x540/fff1f1/ff4d4f.png?text=${encodeURIComponent(label.slice(0, 24))}`;
   }
 
   private paragraphsFromText(text: string) {

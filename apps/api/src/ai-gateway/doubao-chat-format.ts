@@ -1,5 +1,7 @@
 const DEFAULT_DOUBAO_API_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEFAULT_DOUBAO_IMAGE_GENERATIONS_URL = "https://ark.cn-beijing.volces.com/api/v3/images/generations";
 const CHAT_COMPLETIONS_PATH = "/chat/completions";
+const IMAGE_GENERATIONS_PATH = "/images/generations";
 
 export interface DoubaoChatMessage {
   role: "system" | "user" | "assistant";
@@ -60,6 +62,20 @@ export function getDoubaoChatCompletionsUrl(baseUrl?: string) {
   }
 
   return `${normalizedBaseUrl}${CHAT_COMPLETIONS_PATH}`;
+}
+
+export function getDoubaoImageGenerationsUrl(baseUrl?: string) {
+  const normalizedBaseUrl = (baseUrl?.trim() || DEFAULT_DOUBAO_IMAGE_GENERATIONS_URL).replace(/\/+$/, "");
+
+  if (normalizedBaseUrl.endsWith(IMAGE_GENERATIONS_PATH)) {
+    return normalizedBaseUrl;
+  }
+
+  if (normalizedBaseUrl.endsWith(CHAT_COMPLETIONS_PATH)) {
+    return `${normalizedBaseUrl.slice(0, -CHAT_COMPLETIONS_PATH.length)}${IMAGE_GENERATIONS_PATH}`;
+  }
+
+  return `${normalizedBaseUrl}${IMAGE_GENERATIONS_PATH}`;
 }
 
 export function buildDoubaoChatCompletionsBody(input: {

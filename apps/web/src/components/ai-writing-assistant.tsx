@@ -28,6 +28,7 @@ interface AiWritingAssistantProps {
   previewTitle?: string;
   previewBodyText?: string;
   recentDrafts?: DraftSummary[];
+  leadingContent?: ReactNode;
   footer?: ReactNode;
   onSelectTitle: (title: string) => void;
   onReplaceBody: (text: string) => void;
@@ -45,6 +46,7 @@ export function AiWritingAssistant({
   previewTitle,
   previewBodyText,
   recentDrafts = [],
+  leadingContent,
   footer,
   onSelectTitle,
   onReplaceBody,
@@ -162,6 +164,8 @@ export function AiWritingAssistant({
       ) : null}
 
       <div className="grid gap-5">
+        {leadingContent}
+
         <section className="rounded-md border border-[#eeeeee] bg-white p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-[#1f2329]">标题优化</h3>

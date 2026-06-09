@@ -8,6 +8,7 @@ import {
 import {
   buildDoubaoChatCompletionsBody,
   getDoubaoChatCompletionsUrl,
+  getDoubaoImageGenerationsUrl,
   parseDoubaoStreamEvent,
   parseDoubaoStreamResult,
   type AiTokenUsage,
@@ -31,6 +32,21 @@ export interface AiProviderCompleteResponse {
   model: string;
   content: string;
   tokenUsage?: AiTokenUsage;
+}
+
+export interface AiProviderImageInput {
+  apiKey: string;
+  baseUrl?: string;
+  model: string;
+  prompt: string;
+  timeoutMs: number;
+  maxRetries: number;
+  size?: string;
+}
+
+export interface AiProviderImageResponse {
+  model: string;
+  url: string;
 }
 
 export interface AiProviderTextDelta {
@@ -70,6 +86,22 @@ export class AiProviderClient {
     };
   }
 
+  async generateImage(input: AiProviderImageInput): Promise<AiProviderImageResponse> {
+    let attempt = 0;
+
+    while (true) {
+      try {
+        return await this.generateImageOnce(input);
+      } catch (error) {
+        if (error instanceof AiProviderBadOutputException) throw error;
+        if (error instanceof AiProviderTimeoutException) throw error;
+        if (error instanceof AiProviderUnavailableException && attempt >= input.maxRetries) throw error;
+        if (!(error instanceof AiProviderUnavailableException)) throw error;
+        attempt += 1;
+      }
+    }
+  }
+
   async *streamText(input: AiProviderCompleteInput): AsyncGenerator<AiProviderTextDelta> {
     let attempt = 0;
 
@@ -84,6 +116,57 @@ export class AiProviderClient {
         if (!(error instanceof AiProviderUnavailableException)) throw error;
         attempt += 1;
       }
+    }
+  }
+
+  private async generateImageOnce(input: AiProviderImageInput): Promise<AiProviderImageResponse> {
+    const fetcher = this.fetchImpl ?? fetch;
+    let response: Response;
+
+    try {
+      response = await fetcher(getDoubaoImageGenerationsUrl(input.baseUrl), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${input.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: input.model,
+          prompt: input.prompt,
+          sequential_image_generation: "disabled",
+          response_format: "url",
+          size: input.size ?? "2K",
+          stream: false,
+        }),
+        signal: createTimeoutSignal(input.timeoutMs),
+      });
+    } catch (error) {
+      if (isTimeoutError(error)) throw new AiProviderTimeoutException();
+      throw new AiProviderUnavailableException(getProviderErrorDetail(error));
+    }
+
+    if (!response.ok) {
+      throw new AiProviderUnavailableException(await getProviderErrorDetailFromResponse(response));
+    }
+
+    const payload = await this.readImageResponseJson(response);
+    const url = extractImageUrl(payload);
+
+    if (!url) {
+      throw new AiProviderBadOutputException("Image model did not return a usable URL.");
+    }
+
+    return {
+      model: readImageResponseModel(payload) ?? input.model,
+      url,
+    };
+  }
+
+  private async readImageResponseJson(response: Response) {
+    try {
+      return (await response.json()) as unknown;
+    } catch {
+      throw new AiProviderBadOutputException("Image model returned invalid JSON.");
     }
   }
 
@@ -204,6 +287,35 @@ export class AiProviderClient {
       throw new AiProviderUnavailableException(getProviderErrorDetail(error));
     }
   }
+}
+
+function extractImageUrl(payload: unknown) {
+  if (!payload || typeof payload !== "object") return "";
+
+  const record = payload as Record<string, unknown>;
+  const data = Array.isArray(record.data) ? record.data : [];
+  const first = data.find((item) => item && typeof item === "object") as Record<string, unknown> | undefined;
+  const url = first && readString(first.url) || first && readString(first.image_url);
+
+  if (url && /^https?:\/\//i.test(url)) return url;
+
+  const nestedImageUrl = first?.image_url;
+  if (nestedImageUrl && typeof nestedImageUrl === "object") {
+    const nestedUrl = readString((nestedImageUrl as Record<string, unknown>).url);
+    if (nestedUrl && /^https?:\/\//i.test(nestedUrl)) return nestedUrl;
+  }
+
+  const directUrl = readString(record.url);
+  return /^https?:\/\//i.test(directUrl) ? directUrl : "";
+}
+
+function readImageResponseModel(payload: unknown) {
+  if (!payload || typeof payload !== "object") return undefined;
+  return readString((payload as Record<string, unknown>).model) || undefined;
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function createAiProviderTextDelta(

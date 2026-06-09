@@ -198,32 +198,15 @@ pnpm dev:raw
 登录 -> 工作台创作 -> 保存草稿 -> 审核评分 -> 发布 -> 查看文章详情
 ```
 
-本地运行前先准备数据库和 seed 数据：
+Smoke E2E 会登录、创建草稿、发布文章并写入互动链路相关数据，因此也必须使用 E2E 专用数据库，不能写入当前开发/演示数据库。
 
-```bash
-pnpm db:up
-pnpm prisma:migrate
-pnpm prisma:seed
-pnpm test:e2e:smoke
-```
-
-`pnpm test:e2e:smoke` 会自动启动 API 和 Web，并强制使用 `AI_PROVIDER_MODE=mock`，避免依赖真实模型密钥。Windows 本地默认使用系统 Chrome；如果环境没有可用浏览器，可先运行：
-
-```bash
-pnpm playwright:install
-```
-
-## 榜单性能 E2E 与测试数据库
-
-榜单首屏 LCP 和滚动加载使用独立 Playwright 性能 E2E 验证。该用例会写入专门的测试文章、质量分和互动数据，所以必须使用独立数据库，不能指向当前开发/演示数据库。
-
-推荐本地准备方式：
+本地运行前先启动数据库服务：
 
 ```bash
 pnpm db:up
 ```
 
-然后创建 E2E 专用数据库。Docker Compose 启动的 PostgreSQL 默认用户是 `postgres/postgres`，可以用任意 PostgreSQL 客户端执行：
+然后准备 E2E 数据库。Docker Compose 启动的 PostgreSQL 默认用户是 `postgres/postgres`，可以用任意 PostgreSQL 客户端执行：
 
 ```sql
 CREATE DATABASE bytecamp_aigc_e2e;
@@ -235,6 +218,22 @@ CREATE DATABASE bytecamp_aigc_e2e;
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bytecamp_aigc
 E2E_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bytecamp_aigc_e2e
 ```
+
+运行：
+
+```bash
+pnpm test:e2e:smoke
+```
+
+`pnpm test:e2e:smoke` 会先校验 `E2E_DATABASE_URL`，对 E2E 数据库执行 Prisma migration 和 seed，然后自动启动 API 和 Web，并强制使用 `AI_PROVIDER_MODE=mock`，避免依赖真实模型密钥。脚本会把 API 的 `DATABASE_URL` 指向 `E2E_DATABASE_URL`，且不会回退到开发库。Windows 本地默认使用系统 Chrome；如果环境没有可用浏览器，可先运行：
+
+```bash
+pnpm playwright:install
+```
+
+## 榜单性能 E2E 与测试数据库
+
+榜单首屏 LCP 和滚动加载使用独立 Playwright 性能 E2E 验证。该用例会写入专门的测试文章、质量分和互动数据，所以同样使用上面配置的 `E2E_DATABASE_URL`，不能指向当前开发/演示数据库。
 
 注意：
 

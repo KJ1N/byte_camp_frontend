@@ -82,6 +82,47 @@ export interface GeneratedArticleDraft {
   body: RichTextDocument;
 }
 
+export interface GenerateMultimodalInput {
+  topic: string;
+  audience: string;
+  style: string;
+  promptId?: string;
+  imagePrompt?: string;
+  imageCount?: number;
+}
+
+export interface MultimodalImagePlan {
+  prompt: string;
+  caption: string;
+  alt: string;
+}
+
+export interface GeneratedImageResult extends MultimodalImagePlan, Record<string, unknown> {
+  index: number;
+  url: string;
+  model: string;
+  status: "completed";
+}
+
+export interface FailedGeneratedImageResult extends MultimodalImagePlan, Record<string, unknown> {
+  index: number;
+  model: string;
+  status: "failed";
+  message: string;
+}
+
+export type MultimodalImageResult = GeneratedImageResult | FailedGeneratedImageResult;
+
+export interface GeneratedMultimodalDraft {
+  textModel: string;
+  imageModel: string;
+  title: string;
+  outline: string[];
+  bodyText: string;
+  body: RichTextDocument;
+  images: MultimodalImageResult[];
+}
+
 export interface CreatorInspiration {
   id: string;
   topic: string;
@@ -193,12 +234,15 @@ export interface ComplianceRewriteDoneData {
 }
 
 export type AiStreamEvent =
-  | { event: "meta"; data: { model: string } }
+  | { event: "meta"; data: { model?: string; textModel?: string; imageModel?: string } }
   | { event: "title"; data: { text: string; index?: number; partial?: boolean } }
   | { event: "outline"; data: { items: string[] } }
   | { event: "body-delta"; data: { text: string } }
   | { event: "text-delta"; data: { text: string } }
   | { event: "suggestion"; data: { text: string } }
+  | { event: "image-plan"; data: { images: MultimodalImagePlan[] } }
+  | { event: "image-status"; data: { index: number; status: "generating" | "failed"; message?: string } }
+  | { event: "image"; data: GeneratedImageResult }
   | { event: "done"; data: Record<string, unknown> }
   | { event: "error"; data: { message: string } };
 

@@ -2,6 +2,8 @@ import type {
   AuditResult,
   ComplianceRewriteContext,
   GenerateArticleInput,
+  GenerateMultimodalInput,
+  MultimodalImagePlan,
   OptimizeTitlesInput,
   QualityScore,
   RewriteArticleInput,
@@ -11,6 +13,7 @@ import type { AiChatMessage } from "./ai-provider.client";
 import { AiProviderBadOutputException } from "./ai-gateway.errors";
 
 export const ARTICLE_GENERATION_CATEGORY = "article_generation";
+export const MULTIMODAL_GENERATION_CATEGORY = "multimodal_generation";
 export const TITLE_OPTIMIZATION_CATEGORY = "title_optimization";
 export const ARTICLE_REWRITE_CATEGORY = "article_rewrite";
 
@@ -23,6 +26,10 @@ export interface ParsedArticleGeneration {
   title: string;
   outline: string[];
   bodyText: string;
+}
+
+export interface ParsedMultimodalGeneration extends ParsedArticleGeneration {
+  images: MultimodalImagePlan[];
 }
 
 export interface ParsedTitleOptimization {
@@ -43,6 +50,13 @@ export const defaultArticleGenerationPrompt: ArticleGenerationPrompt = {
   systemPrompt:
     "You are AI Creator Hub's Chinese article assistant. Generate clear, useful, platform-ready article drafts.",
   userTemplate: "Topic: {{topic}}\nAudience: {{audience}}\nStyle: {{style}}\nGenerate a title, outline, and article body.",
+};
+
+export const defaultMultimodalGenerationPrompt: ArticleGenerationPrompt = {
+  systemPrompt:
+    "You are AI Creator Hub's Chinese multimodal article planner. Generate Chinese article text and image prompts for a publishing workflow.",
+  userTemplate:
+    "Topic: {{topic}}\nAudience: {{audience}}\nStyle: {{style}}\nGenerate article text and matching image prompts.",
 };
 
 export function buildArticleGenerationMessages(
@@ -70,6 +84,49 @@ Requirements:
 - Keep the title concise and suitable for a creator publishing workflow.
 - Return 4 to 6 outline items.
 - Return at least 4 body paragraphs.
+- Avoid inventing precise data sources.`,
+    },
+  ];
+}
+
+export function buildMultimodalGenerationMessages(
+  input: GenerateMultimodalInput,
+  prompt: ArticleGenerationPrompt,
+): AiChatMessage[] {
+  const imageCount = normalizeImageCount(input.imageCount);
+  const imagePrompt = input.imagePrompt?.trim();
+
+  return [
+    {
+      role: "system",
+      content: `${prompt.systemPrompt}
+
+Return only a JSON object. Do not return Markdown fences or extra commentary. Use this schema:
+{
+  "title": "article title",
+  "outline": ["outline item 1", "outline item 2"],
+  "bodyText": "plain text body, paragraphs separated by \\n\\n",
+  "images": [
+    {
+      "prompt": "detailed image generation prompt",
+      "caption": "short image caption",
+      "alt": "accessible image alt text"
+    }
+  ]
+}`,
+    },
+    {
+      role: "user",
+      content: `${renderPromptTemplate(prompt.userTemplate, input)}
+${imagePrompt ? `\nImage prompt template:\n${imagePrompt}\n` : ""}
+
+Requirements:
+- Use Simplified Chinese unless the user topic requires another language.
+- Generate exactly ${imageCount} image prompt(s).
+- The body should satisfy the user's requested length when they mention one, otherwise use 2 to 4 concise paragraphs.
+- Each image prompt must be concrete and visual, matching the article content.
+- When an image prompt template is provided, use it as the main visual instruction and adapt details for each image without changing the user's image intent.
+- Do not put policy decisions, API keys, or implementation details in the article.
 - Avoid inventing precise data sources.`,
     },
   ];
@@ -278,6 +335,24 @@ export function parseArticleGenerationJson(rawContent: string): ParsedArticleGen
   return { title, outline, bodyText };
 }
 
+export function parseMultimodalGenerationJson(
+  rawContent: string,
+  imageCount: number,
+): ParsedMultimodalGeneration {
+  const article = parseArticleGenerationJson(rawContent);
+  const record = asRecord(parseJsonObject(rawContent));
+  const images = readImagePlans(record.images).slice(0, normalizeImageCount(imageCount));
+
+  if (!images.length) {
+    throw new AiProviderBadOutputException();
+  }
+
+  return {
+    ...article,
+    images,
+  };
+}
+
 export function parseTitleOptimizationJson(rawContent: string): ParsedTitleOptimization {
   const value = parseJsonObject(rawContent);
   const titles = unique(readStringArray(asRecord(value).titles));
@@ -386,6 +461,24 @@ function readStringArray(value: unknown) {
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function readImagePlans(value: unknown): MultimodalImagePlan[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return undefined;
+      const record = item as Record<string, unknown>;
+      const prompt = readString(record.prompt);
+      const caption = readString(record.caption);
+      const alt = readString(record.alt) || caption;
+
+      if (!prompt || !caption || !alt) return undefined;
+
+      return { prompt, caption, alt };
+    })
+    .filter((item): item is MultimodalImagePlan => Boolean(item));
 }
 
 function readAuditDecision(value: unknown): AuditDecision {
@@ -513,11 +606,16 @@ function escapeControlCharactersInsideJsonStrings(jsonText: string) {
   return result;
 }
 
-function renderPromptTemplate(template: string, input: GenerateArticleInput) {
+function renderPromptTemplate(template: string, input: Pick<GenerateArticleInput, "topic" | "audience" | "style">) {
   return template
     .replaceAll("{{topic}}", input.topic)
     .replaceAll("{{audience}}", input.audience)
     .replaceAll("{{style}}", input.style);
+}
+
+function normalizeImageCount(value: number | undefined) {
+  const count = Number.isFinite(value) ? Math.round(value ?? 2) : 2;
+  return Math.max(1, Math.min(4, count));
 }
 
 function extractJsonObject(rawContent: string) {
