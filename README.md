@@ -213,6 +213,49 @@ pnpm test:e2e:smoke
 pnpm playwright:install
 ```
 
+## 榜单性能 E2E 与测试数据库
+
+榜单首屏 LCP 和滚动加载使用独立 Playwright 性能 E2E 验证。该用例会写入专门的测试文章、质量分和互动数据，所以必须使用独立数据库，不能指向当前开发/演示数据库。
+
+推荐本地准备方式：
+
+```bash
+pnpm db:up
+```
+
+然后创建 E2E 专用数据库。Docker Compose 启动的 PostgreSQL 默认用户是 `postgres/postgres`，可以用任意 PostgreSQL 客户端执行：
+
+```sql
+CREATE DATABASE bytecamp_aigc_e2e;
+```
+
+在根目录 `.env` 中配置：
+
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bytecamp_aigc
+E2E_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bytecamp_aigc_e2e
+```
+
+注意：
+
+- `E2E_DATABASE_URL` 必须和 `DATABASE_URL` 不同。
+- `E2E_DATABASE_URL` 不能指向默认开发库 `bytecamp_aigc`。
+- 性能 E2E 的测试文章 ID 使用 `e2e-ranking-lcp-*` 前缀，只应出现在 E2E 数据库中。
+
+运行榜单性能 E2E：
+
+```bash
+pnpm test:e2e:rankings-performance
+```
+
+该脚本会：
+
+1. 校验 `E2E_DATABASE_URL`，防止误写开发库。
+2. 对 E2E 数据库执行 Prisma migration。
+3. 写入榜单性能测试数据。
+4. 启动 API 和 Web，并强制使用 mock AI。
+5. 用 Playwright 打开热点榜和爆文榜，采集 LCP 并验证滚动加载。
+
 ## 文档
 
 - [完整 PRD](./docs/PRD.md)

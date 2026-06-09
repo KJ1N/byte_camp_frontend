@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ArticleListItem, CursorPageResponse } from "@bytecamp-aigc/shared";
 
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
@@ -34,7 +34,10 @@ export default function ContentHomePage() {
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [state, setState] = useState<PageState>("loading");
   const [loadingMore, setLoadingMore] = useState(false);
+  const [autoLoadSupported, setAutoLoadSupported] = useState(true);
   const [error, setError] = useState("");
+  const [loadMoreError, setLoadMoreError] = useState("");
+  const feedSentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setUser(getStoredUser());
@@ -44,6 +47,7 @@ export default function ContentHomePage() {
   async function loadHome() {
     setState("loading");
     setError("");
+    setLoadMoreError("");
 
     const [feedResult, hotResult, topResult] = await Promise.all([
       requestArticlePage("/feed?limit=6"),
@@ -65,21 +69,45 @@ export default function ContentHomePage() {
     setState(feedItems.length ? "ready" : "empty");
   }
 
-  async function loadMore() {
+  const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
 
     setLoadingMore(true);
+    setLoadMoreError("");
     const result = await requestArticlePage(`/feed?limit=6&cursor=${encodeURIComponent(nextCursor)}`);
     setLoadingMore(false);
 
     if (!result.ok || !result.data) {
-      setError(result.error || "加载更多失败，请稍后重试。");
+      setLoadMoreError(result.error || "加载更多失败，请稍后重试。");
       return;
     }
 
     setFeed((current) => [...current, ...result.data.items]);
     setNextCursor(result.data.nextCursor);
-  }
+  }, [loadingMore, nextCursor]);
+
+  useEffect(() => {
+    const sentinel = feedSentinelRef.current;
+    if (!sentinel || !nextCursor || state !== "ready") return;
+
+    if (typeof IntersectionObserver === "undefined") {
+      setAutoLoadSupported(false);
+      return;
+    }
+
+    setAutoLoadSupported(true);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadMore();
+        }
+      },
+      { rootMargin: "480px 0px" },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore, nextCursor, state]);
 
   function logout() {
     clearAuthSession();
@@ -170,12 +198,17 @@ export default function ContentHomePage() {
             </div>
           ) : (
             <>
-              <div className="divide-y divide-[#eeeeee]">
+              <div className="divide-y divide-[#eeeeee]" data-testid="feed-list">
                 {feed.map((article) => (
                   <ArticleRow article={article} key={article.id} />
                 ))}
               </div>
               <div className="border-t border-[#eeeeee] px-6 py-5 text-center">
+                {loadMoreError ? (
+                  <div className="mb-3 rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-4 py-3 text-sm text-[#d92d2d]">
+                    {loadMoreError}
+                  </div>
+                ) : null}
                 {nextCursor ? (
                   <button
                     className="rounded-md border border-[#dedede] px-5 py-2 text-sm font-semibold text-[#4e5661] hover:bg-[#f8f8f8] disabled:text-[#a8adb5]"
@@ -183,11 +216,12 @@ export default function ContentHomePage() {
                     type="button"
                     onClick={() => void loadMore()}
                   >
-                    {loadingMore ? "加载中..." : "加载更多"}
+                    {loadingMore ? "加载中..." : autoLoadSupported ? "继续加载" : "加载更多"}
                   </button>
                 ) : (
                   <span className="text-sm text-[#8f959e]">没有更多内容了</span>
                 )}
+                <div ref={feedSentinelRef} aria-hidden="true" className="h-1" data-testid="feed-scroll-sentinel" />
               </div>
             </>
           )}
@@ -235,6 +269,7 @@ function ArticleRow({ article }: { article: ArticleListItem }) {
   return (
     <Link
       className="grid gap-5 px-6 py-6 transition hover:bg-[#fafafa] md:grid-cols-[minmax(0,1fr)_132px]"
+      data-testid="feed-row"
       href={`/articles/${article.id}`}
       onClick={() => markArticleViewIntent(window.sessionStorage, article.id)}
     >
