@@ -136,17 +136,22 @@ AI 生成默认使用 `AI_PROVIDER_MODE=auto`：当 `.env` 中配置了真实 `A
 
 ```env
 AI_PROVIDER_MODE=live
-AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3/chat/completions
 AI_API_KEY=your-provider-key
 AI_MODEL=your-model-name
 AI_TIMEOUT_MS=60000
 AI_MAX_RETRIES=1
+
+# 图片素材审核默认复用 AI_API_KEY 和 AI_MODEL；如需单独视觉模型，可配置 ASSET_VISION_MODEL
+ASSET_AUDIT_MODE=auto
+ASSET_VISION_MODEL=
 ```
 
 如需课堂演示或离线开发：
 
 ```env
 AI_PROVIDER_MODE=mock
+ASSET_AUDIT_MODE=mock
 ```
 
 `pnpm dev` 会先检测本机端口，再自动启动：

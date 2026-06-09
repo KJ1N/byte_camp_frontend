@@ -81,15 +81,15 @@ export class AssetAuditService {
   }
 
   private async auditLiveImage(input: { buffer: Buffer; mimeType: string; filename: string }): Promise<AssetAuditResult> {
-    const apiKey = this.config?.get<string>("AI_API_KEY")?.trim();
-    const baseUrl = this.config?.get<string>("AI_BASE_URL")?.trim() || "https://api.openai.com/v1";
-    const model = this.config?.get<string>("ASSET_VISION_MODEL")?.trim();
+    const apiKey = this.readConfig("AI_API_KEY");
+    const baseUrl = this.getLiveAuditUrl();
+    const model = this.getLiveAuditModel();
 
-    if (!apiKey || !model) {
+    if (!apiKey || !model || this.isPlaceholder(apiKey) || this.isPlaceholder(model)) {
       throw new ServiceUnavailableException("视觉审核模型未配置。");
     }
 
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    const response = await fetch(baseUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -169,12 +169,33 @@ export class AssetAuditService {
   }
 
   private getMode(): AssetAuditMode {
-    const mode = this.config?.get<string>("ASSET_AUDIT_MODE")?.trim();
-    if (mode === "live" || mode === "auto") return mode;
-    return "mock";
+    const mode = this.readConfig("ASSET_AUDIT_MODE");
+    if (mode === "live" || mode === "mock") return mode;
+    return "auto";
+  }
+
+  private getLiveAuditUrl() {
+    return this.readConfig("AI_BASE_URL") || "https://api.openai.com/v1/chat/completions";
+  }
+
+  private getLiveAuditModel() {
+    const visionModel = this.readConfig("ASSET_VISION_MODEL");
+    if (!this.isPlaceholder(visionModel)) return visionModel;
+
+    const sharedModel = this.readConfig("AI_MODEL");
+    return this.isPlaceholder(sharedModel) ? undefined : sharedModel;
   }
 
   private hasLiveConfig() {
-    return Boolean(this.config?.get<string>("AI_API_KEY")?.trim() && this.config?.get<string>("ASSET_VISION_MODEL")?.trim());
+    return !this.isPlaceholder(this.readConfig("AI_API_KEY")) && Boolean(this.getLiveAuditModel());
+  }
+
+  private readConfig(key: string) {
+    const value = this.config?.get<string>(key);
+    return typeof value === "string" ? value.trim() : undefined;
+  }
+
+  private isPlaceholder(value: string | undefined) {
+    return !value || value.startsWith("replace-with-") || value.includes("your-");
   }
 }
