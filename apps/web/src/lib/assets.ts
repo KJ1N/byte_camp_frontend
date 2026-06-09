@@ -5,6 +5,7 @@ import {
   type AssetFolderSummary,
   type AssetSummary,
 } from "@bytecamp-aigc/shared";
+import { apiBaseUrl } from "./api.ts";
 
 const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const documentMimeTypes = new Set([
@@ -63,4 +64,10 @@ export function filterAssetFoldersByKind(folders: AssetFolderSummary[], kind: As
 
 export function getDefaultAssetFolderId(folders: AssetFolderSummary[], kind: AssetFolderKind): string {
   return filterAssetFoldersByKind(folders, kind)[0]?.id ?? "";
+}
+
+export function resolveAssetUrl(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url;
+
+  return `${apiBaseUrl().replace(/\/$/, "")}/${url.replace(/^\/+/, "")}`;
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import {
   AssetAuditStatus,
   AssetFolderKind,
@@ -16,7 +16,19 @@ import {
   getAssetKindFromMimeType,
   getAssetUploadValidationError,
   getDefaultAssetFolderId,
+  resolveAssetUrl,
 } from "./assets.ts";
+
+const originalApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+
+afterEach(() => {
+  if (originalApiBaseUrl === undefined) {
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    return;
+  }
+
+  process.env.NEXT_PUBLIC_API_BASE_URL = originalApiBaseUrl;
+});
 
 describe("asset helpers", () => {
   it("maps supported MIME types to asset kinds", () => {
@@ -89,6 +101,13 @@ describe("asset helpers", () => {
     ]);
     assert.equal(getDefaultAssetFolderId(folders, AssetFolderKind.Image), "folder-image");
     assert.equal(getDefaultAssetFolderId([], AssetFolderKind.Image), "");
+  });
+
+  it("resolves relative asset view URLs against the API base URL", () => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = "https://api.example.com/";
+
+    assert.equal(resolveAssetUrl("/assets/asset-1/view"), "https://api.example.com/assets/asset-1/view");
+    assert.equal(resolveAssetUrl("https://cdn.example.com/assets/asset-1.png"), "https://cdn.example.com/assets/asset-1.png");
   });
 });
 

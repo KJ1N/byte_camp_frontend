@@ -223,6 +223,16 @@ export class AssetsService {
     return { assetId, message: "素材已删除。" };
   }
 
+  async getAssetReadUrl(assetId: string): Promise<string> {
+    const asset = (await this.prisma.asset.findUnique({ where: { id: assetId } })) as AssetRecord | null;
+    if (!asset) throw new NotFoundException("素材不存在。");
+
+    const metadata = this.readMetadata(asset.metadata);
+    if (!metadata.storageKey) return asset.url;
+
+    return this.storage.getObjectUrl(metadata.storageKey);
+  }
+
   private validateFile(file: UploadedAssetFile, kind: AssetKind) {
     const limit = kind === AssetKind.Image ? imageSizeLimit : documentSizeLimit;
     if (file.size > limit) {
@@ -497,11 +507,15 @@ export class AssetsService {
       folderId: asset.folderId ?? null,
       filename: asset.filename,
       mimeType: asset.mimeType,
-      url: metadata.storageKey ? this.storage.getObjectUrl(metadata.storageKey) : asset.url,
+      url: metadata.storageKey ? this.buildAssetViewUrl(asset.id) : asset.url,
       auditStatus: asset.auditStatus as AssetAuditStatus,
       metadata: publicMetadata,
       createdAt: asset.createdAt.toISOString(),
     };
+  }
+
+  private buildAssetViewUrl(assetId: string) {
+    return `/assets/${encodeURIComponent(assetId)}/view`;
   }
 
   private readMetadata(value: unknown): StoredAssetMetadata {

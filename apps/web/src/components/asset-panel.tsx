@@ -23,6 +23,7 @@ import {
   formatAssetSize,
   getAssetAuditTone,
   getAssetUploadValidationError,
+  resolveAssetUrl,
 } from "@/lib/assets";
 import { getDraftEditorOverlayPresentation } from "@/lib/editor-overlay-state";
 
@@ -284,7 +285,7 @@ export function AssetPanel({
 
   async function copyAssetUrl(asset: AssetSummary) {
     if (!navigator.clipboard) return;
-    await navigator.clipboard.writeText(asset.url);
+    await navigator.clipboard.writeText(resolveAssetUrl(asset.url));
     setCopiedAssetId(asset.id);
     window.setTimeout(() => setCopiedAssetId(""), 1400);
   }
@@ -600,6 +601,7 @@ function AssetDetail({
         ? "bg-[#fffaf0] text-[#8a5a00]"
         : "bg-[#fff6f6] text-[#d92d2d]";
   const textContent = asset.metadata.textContent ?? asset.metadata.textPreview ?? "";
+  const assetUrl = resolveAssetUrl(asset.url);
 
   return (
     <article className="rounded-md border border-[#eeeeee] bg-[#fbfbfb] p-4">
@@ -614,7 +616,7 @@ function AssetDetail({
       </div>
 
       {asset.kind === AssetKind.Image ? (
-        <img alt={asset.metadata.originalName} className="mt-4 max-h-80 w-full rounded-md bg-[#f6f7f9] object-contain" src={asset.url} />
+        <img alt={asset.metadata.originalName} className="mt-4 max-h-80 w-full rounded-md bg-[#f6f7f9] object-contain" src={assetUrl} />
       ) : (
         <textarea
           className="mt-4 min-h-64 w-full resize-y rounded-md border border-[#dedede] bg-white px-3 py-3 text-sm leading-7 text-[#2f3640] outline-none focus:border-[#ff4d4f]"
@@ -655,6 +657,7 @@ function AssetDetail({
         <button className="rounded-md bg-[#f0f1f3] px-3 py-2 text-xs font-semibold text-[#4e5661]" type="button" onClick={() => onCopy(asset)}>
           {copied ? "已复制" : "复制 URL"}
         </button>
+
         <button
           className="rounded-md bg-[#fff6f6] px-3 py-2 text-xs font-semibold text-[#d92d2d] disabled:opacity-50"
           disabled={deleting}

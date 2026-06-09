@@ -1,4 +1,5 @@
 import type { AssetSummary } from "@bytecamp-aigc/shared";
+import { resolveAssetUrl } from "./assets.ts";
 
 export type WorkspaceSidePanelTab = "ai" | "assets";
 
@@ -17,7 +18,7 @@ export const workspaceSidePanelTabs: ReadonlyArray<{ id: WorkspaceSidePanelTab; 
 export function createWorkspaceImageInsertRequest(asset: AssetSummary): EditorImageInsertRequest {
   return {
     id: `${asset.id}-${Date.now()}`,
-    src: asset.url,
+    src: resolveAssetUrl(asset.url),
     alt: asset.metadata.originalName || asset.filename,
     assetId: asset.id,
   };

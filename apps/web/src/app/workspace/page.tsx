@@ -26,7 +26,7 @@ import {
   plainTextFromRichText,
   replaceWithPlainText,
 } from "@/lib/rich-text-document";
-import { formatAssetSize } from "@/lib/assets";
+import { formatAssetSize, resolveAssetUrl } from "@/lib/assets";
 import { nextSelectedPromptIdAfterDelete } from "@/lib/prompt-management";
 import { buildWorkspaceGeneratedBody } from "@/lib/workspace-generated-body";
 import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
@@ -399,7 +399,7 @@ export default function WorkspacePage() {
       const base = current ?? createEmptyGenerated();
       const body = appendDocumentAttachment(base.body, {
         name: asset.metadata.originalName || asset.filename,
-        url: asset.url,
+        url: resolveAssetUrl(asset.url),
         sizeLabel: formatAssetSize(asset.metadata.size),
       });
       return {

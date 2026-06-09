@@ -34,7 +34,7 @@ import {
   plainTextFromRichText,
   replaceWithPlainText,
 } from "@/lib/rich-text-document";
-import { formatAssetSize } from "@/lib/assets";
+import { formatAssetSize, resolveAssetUrl } from "@/lib/assets";
 
 const emptyDoc: RichTextDocument = replaceWithPlainText("");
 
@@ -392,7 +392,7 @@ export default function DraftEditorPage() {
   function insertAssetImage(asset: AssetSummary) {
     setImageInsertRequest({
       id: `${asset.id}-${Date.now()}`,
-      src: asset.url,
+      src: resolveAssetUrl(asset.url),
       alt: asset.metadata.originalName || asset.filename,
       assetId: asset.id,
     });
@@ -404,7 +404,7 @@ export default function DraftEditorPage() {
     updateBody(
       appendDocumentAttachment(body, {
         name: asset.metadata.originalName || asset.filename,
-        url: asset.url,
+        url: resolveAssetUrl(asset.url),
         sizeLabel: formatAssetSize(asset.metadata.size),
       }),
     );

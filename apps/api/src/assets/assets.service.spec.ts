@@ -200,7 +200,7 @@ describe("AssetsService", () => {
     await assert.rejects(() => service.deleteFolder("user-1", imageFolderId), BadRequestException);
   });
 
-  it("uploads a passed image to cloud storage and returns a CDN URL", async () => {
+  it("uploads a passed image to cloud storage and returns a stable asset view URL", async () => {
     const { service, calls, imageFolderId } = createService();
 
     const result = await service.uploadAsset("user-1", createFile(), imageFolderId);
@@ -208,11 +208,12 @@ describe("AssetsService", () => {
     assert.equal(result.asset.kind, AssetKind.Image);
     assert.equal(result.asset.folderId, imageFolderId);
     assert.equal(result.asset.auditStatus, AssetAuditStatus.Passed);
-    assert.equal(result.asset.url, `https://cdn.example.com/assets/user-1/${result.asset.id}.png`);
+    assert.equal(result.asset.url, `/assets/${result.asset.id}/view`);
     assert.equal(result.asset.metadata.storageKey, `assets/user-1/${result.asset.id}.png`);
     assert.equal(calls.auditInputs.length, 1);
     assert.deepEqual(calls.uploads, [{ key: `assets/user-1/${result.asset.id}.png`, contentType: "image/png" }]);
     assert.equal(calls.createdAssets[0].authorId, "user-1");
+    assert.equal(calls.createdAssets[0].url, `https://cdn.example.com/assets/user-1/${result.asset.id}.png`);
   });
 
   it("decodes UTF-8 filenames that multipart parsers expose as latin1 text", async () => {
@@ -242,7 +243,7 @@ describe("AssetsService", () => {
     assert.equal(result.asset.kind, AssetKind.Document);
     assert.equal(result.asset.folderId, documentFolderId);
     assert.equal(result.asset.auditStatus, AssetAuditStatus.Passed);
-    assert.equal(result.asset.url, `https://cdn.example.com/assets/user-1/${result.asset.id}.md`);
+    assert.equal(result.asset.url, `/assets/${result.asset.id}/view`);
     assert.equal(result.asset.metadata.textContent, "# brief");
     assert.equal(result.asset.metadata.textPreview, "# brief");
     assert.equal(calls.auditInputs.length, 0);
@@ -444,7 +445,7 @@ describe("AssetsService", () => {
     assert.equal(result.items[0].metadata.originalName, "头像.jpg");
   });
 
-  it("refreshes listed asset URLs from the storage key so private bucket links stay readable", async () => {
+  it("returns a stable asset view URL for stored private bucket objects", async () => {
     const { service, assets, calls } = createService();
     assets.set("asset-legacy", {
       id: "asset-legacy",
@@ -474,7 +475,41 @@ describe("AssetsService", () => {
 
     const result = await service.listMine("user-1");
 
-    assert.equal(result.items[0].url, "https://cdn.example.com/assets/user-1/asset-legacy.jpg");
+    assert.equal(result.items[0].url, "/assets/asset-legacy/view");
+    assert.deepEqual(calls.objectUrls, []);
+  });
+
+  it("generates a fresh cloud read URL when the stable view endpoint is resolved", async () => {
+    const { service, assets, calls } = createService();
+    assets.set("asset-legacy", {
+      id: "asset-legacy",
+      authorId: "user-1",
+      filename: "asset-legacy.jpg",
+      folderId: "folder-image",
+      mimeType: "image/jpeg",
+      url: "https://cdn.example.com/assets/user-1/asset-legacy.jpg?Expires=old",
+      auditStatus: AssetAuditStatus.Passed,
+      metadata: {
+        kind: AssetKind.Image,
+        originalName: "澶村儚.jpg",
+        size: 1024,
+        storageKey: "assets/user-1/asset-legacy.jpg",
+        audit: {
+          decision: AssetAuditStatus.Passed,
+          riskLevel: "none",
+          categories: [],
+          evidence: [],
+          summary: "瑙嗚瀹℃牳閫氳繃",
+          model: "vision-audit-mock",
+          source: "MOCK",
+        },
+      },
+      createdAt: new Date("2026-06-07T10:00:00.000Z"),
+    });
+
+    const url = await service.getAssetReadUrl("asset-legacy");
+
+    assert.equal(url, "https://cdn.example.com/assets/user-1/asset-legacy.jpg");
     assert.deepEqual(calls.objectUrls, ["assets/user-1/asset-legacy.jpg"]);
   });
 
