@@ -7,7 +7,7 @@ type AssetAuditMode = "auto" | "mock" | "live";
 const maxImageBytes = 5 * 1024 * 1024;
 const maxImageRedirects = 5;
 const maxImageDownloadAttempts = 3;
-const defaultImageDownloadTimeoutMs = 10_000;
+const defaultImageDownloadTimeoutMs = 120_000;
 
 const highRiskFilenameRules: Array<{ pattern: RegExp; category: RiskCategory; reason: string }> = [
   { pattern: /赌博|博彩|赌场/i, category: RiskCategory.Gambling, reason: "文件名命中赌博或博彩风险词。" },
