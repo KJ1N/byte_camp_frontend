@@ -14,7 +14,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:raw": "corepack pnpm -r --parallel dev",
     "lint": "corepack pnpm -r --parallel lint",
-    "test": "corepack pnpm -r --parallel test",
+    "test": "corepack pnpm --filter @bytecamp-aigc/shared build && corepack pnpm -r --parallel test",
     "test:dev-script": "node --test scripts/dev.test.mjs",
     "test:e2e:smoke": "node scripts/e2e-smoke.mjs",
     "test:e2e:rankings-performance": "node scripts/e2e-rankings-performance.mjs",
