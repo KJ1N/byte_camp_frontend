@@ -60,6 +60,7 @@ apps/api
   - 用户与鉴权
   - 草稿、版本、发布
   - Prompt 管理
+  - 每日资讯接入
   - AI Gateway
   - 审核与评分
   - 榜单排序
@@ -151,6 +152,7 @@ apps/api/src
 ├── users/         # 用户资料
 ├── drafts/        # 草稿与版本
 ├── prompts/       # Prompt 库
+├── news/          # 每日 AI 资讯和每日热点资讯接入
 ├── assets/        # 素材上传与校验
 ├── ai-gateway/    # 模型适配与 Prompt 装配
 ├── audit/         # 安全审核
@@ -288,6 +290,14 @@ GET /articles/:id
 POST /articles/:id/events
 ```
 
+### 9.6 每日资讯
+
+```text
+GET /news/creator-daily
+```
+
+该接口由后端调用外部日更资讯服务，统一返回每日 AI 资讯和每日热点资讯。Creator 页面只消费本项目后端接口，不直接访问外部服务。外部接口平均返回时间按 5 到 10 秒处理，后端默认超时为 12 秒；接口不可用时按“实时接口 -> 最近缓存 -> 内置演示数据 -> 前端空状态”降级。
+
 ## 10. 榜单排序
 
 基础分：
@@ -331,6 +341,8 @@ MVP 推荐：
 - `AI_BASE_URL`
 - `AI_API_KEY`
 - `AI_MODEL`
+- `NEWS_PROVIDER_MODE`
+- `NEWS_FETCH_TIMEOUT_MS`
 - `NEXT_PUBLIC_API_BASE_URL`
 
 ## 12. 测试策略

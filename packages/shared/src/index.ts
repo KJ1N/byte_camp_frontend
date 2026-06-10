@@ -135,6 +135,28 @@ export interface CreatorInspirationsResponse {
   items: CreatorInspiration[];
 }
 
+export type DailyNewsKind = "AI" | "HOT";
+
+export type DailyNewsProviderSource = "60s.viki.moe" | "cache" | "mock";
+
+export interface DailyNewsItem {
+  id: string;
+  kind: DailyNewsKind;
+  title: string;
+  summary: string;
+  content: string;
+  source: string;
+  date: string;
+  url?: string;
+}
+
+export interface CreatorDailyNewsResponse {
+  source: DailyNewsProviderSource;
+  date: string;
+  aiNews: DailyNewsItem[];
+  hotNews: DailyNewsItem[];
+}
+
 export interface PromptTemplateSummary {
   id: string;
   name: string;

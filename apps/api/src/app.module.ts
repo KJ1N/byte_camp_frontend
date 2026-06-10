@@ -8,6 +8,7 @@ import { AuditModule } from "./audit/audit.module";
 import { AuthModule } from "./auth/auth.module";
 import { DraftsModule } from "./drafts/drafts.module";
 import { FeedModule } from "./feed/feed.module";
+import { NewsModule } from "./news/news.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { PromptsModule } from "./prompts/prompts.module";
 import { PublishModule } from "./publish/publish.module";
@@ -31,6 +32,7 @@ import { getRootEnvFilePath } from "./common/env-paths";
     ScoringModule,
     PublishModule,
     FeedModule,
+    NewsModule,
     RankingModule,
     AnalyticsModule,
   ],

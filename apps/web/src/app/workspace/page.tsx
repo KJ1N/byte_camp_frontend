@@ -35,6 +35,10 @@ import {
   readWorkspaceLocalDraftState,
   writeWorkspaceLocalDraftState,
 } from "@/lib/workspace-local-draft-state";
+import {
+  clearWorkspacePrefillState,
+  readWorkspacePrefillState,
+} from "@/lib/workspace-prefill";
 import { normalizeWorkspaceTopic } from "@/lib/workspace-topic";
 import {
   createWorkspaceImageInsertRequest,
@@ -134,10 +138,27 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     const storedToken = getStoredToken();
-    const queryTopic = normalizeWorkspaceTopic(new URLSearchParams(window.location.search).get("topic"));
-    const localDraft = readWorkspaceLocalDraftState(window.localStorage);
+    const searchParams = new URLSearchParams(window.location.search);
+    const queryTopic = normalizeWorkspaceTopic(searchParams.get("topic"));
+    const shouldUsePrefill = searchParams.get("prefill") === "creator-news";
+    const prefill = shouldUsePrefill ? readWorkspacePrefillState(window.sessionStorage) : null;
+    const localDraft = prefill ? null : readWorkspaceLocalDraftState(window.localStorage);
 
-    if (localDraft) {
+    if (shouldUsePrefill) {
+      clearWorkspacePrefillState(window.sessionStorage);
+    }
+
+    if (prefill) {
+      clearWorkspaceLocalDraftState(window.localStorage);
+      setTopic(prefill.topic);
+      setAudience(prefill.audience);
+      setStyle(prefill.style);
+      setSelectedPromptId("");
+      setDraftTitle(prefill.draftTitle);
+      setGenerated(prefill.generated);
+      setLocalSavedAt(null);
+      window.history.replaceState(null, "", "/workspace");
+    } else if (localDraft) {
       setTopic(queryTopic || localDraft.topic || defaultTopic);
       setAudience(localDraft.audience);
       setStyle(localDraft.style);

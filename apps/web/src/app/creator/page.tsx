@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type {
   CreatorContentItem,
-  CreatorInspiration,
-  CreatorInspirationsResponse,
+  CreatorDailyNewsResponse,
   CreatorOverviewResponse,
+  DailyNewsItem,
   DeleteDraftResponse,
   WithdrawArticleResponse,
 } from "@bytecamp-aigc/shared";
@@ -23,7 +23,10 @@ import {
   sortCreatorContentsByUpdatedTime,
   type CreatorContentFilter,
 } from "@/lib/creator-overview";
-import { buildWorkspaceTopicHref } from "@/lib/workspace-topic";
+import {
+  createWorkspacePrefillFromDailyNews,
+  writeWorkspacePrefillState,
+} from "@/lib/workspace-prefill";
 
 type LoadState = "loading" | "idle";
 type ActiveSection = "overview" | "contents";
@@ -37,8 +40,17 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-function isCreatorInspirationsResponse(payload: unknown): payload is CreatorInspirationsResponse {
-  return Boolean(payload && typeof payload === "object" && "items" in payload && Array.isArray(payload.items));
+function isCreatorDailyNewsResponse(payload: unknown): payload is CreatorDailyNewsResponse {
+  return Boolean(
+    payload &&
+      typeof payload === "object" &&
+      "source" in payload &&
+      "date" in payload &&
+      "aiNews" in payload &&
+      "hotNews" in payload &&
+      Array.isArray((payload as Partial<CreatorDailyNewsResponse>).aiNews) &&
+      Array.isArray((payload as Partial<CreatorDailyNewsResponse>).hotNews),
+  );
 }
 
 function isCreatorOverviewResponse(payload: unknown): payload is CreatorOverviewResponse {
@@ -57,12 +69,14 @@ export default function CreatorHomePage() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [overview, setOverview] = useState<CreatorOverviewResponse | null>(null);
-  const [inspirations, setInspirations] = useState<CreatorInspiration[]>([]);
+  const [dailyNews, setDailyNews] = useState<CreatorDailyNewsResponse | null>(null);
   const [status, setStatus] = useState<LoadState>("loading");
+  const [newsStatus, setNewsStatus] = useState<LoadState>("loading");
+  const [newsSlow, setNewsSlow] = useState(false);
   const [activeSection, setActiveSection] = useState<ActiveSection>("overview");
   const [contentFilter, setContentFilter] = useState<CreatorContentFilter>("all");
   const [overviewError, setOverviewError] = useState("");
-  const [inspirationError, setInspirationError] = useState("");
+  const [newsError, setNewsError] = useState("");
   const [withdrawError, setWithdrawError] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [pendingWithdrawArticleId, setPendingWithdrawArticleId] = useState("");
@@ -80,10 +94,12 @@ export default function CreatorHomePage() {
 
     if (!storedToken) {
       setStatus("idle");
+      setNewsStatus("idle");
       return;
     }
 
     void loadCreatorData(storedToken);
+    void loadDailyNews(storedToken);
   }, []);
 
   const stats = overview?.stats ?? getEmptyCreatorStats();
@@ -94,28 +110,22 @@ export default function CreatorHomePage() {
   async function loadCreatorData(authToken: string) {
     setStatus("loading");
     setOverviewError("");
-    setInspirationError("");
 
-    const [overviewResponse, inspirationResponse] = await Promise.all([
-      apiFetch("/users/me/creator-overview", { authToken }),
-      apiFetch("/ai/creator-inspirations", { authToken }),
-    ]);
+    const overviewResponse = await apiFetch("/users/me/creator-overview", { authToken });
 
-    if (overviewResponse.status === 401 || inspirationResponse.status === 401) {
+    if (overviewResponse.status === 401) {
       clearAuthSession();
       setToken(null);
       setUser(null);
       setOverview(null);
-      setInspirations([]);
+      setDailyNews(null);
       setStatus("idle");
+      setNewsStatus("idle");
       return;
     }
 
     const overviewPayload = await readApiJson<CreatorOverviewResponse | { message?: string | string[] }>(
       overviewResponse,
-    );
-    const inspirationPayload = await readApiJson<CreatorInspirationsResponse | { message?: string | string[] }>(
-      inspirationResponse,
     );
 
     if (!overviewResponse.ok || !isCreatorOverviewResponse(overviewPayload)) {
@@ -126,14 +136,46 @@ export default function CreatorHomePage() {
       setUser((current) => current ?? { id: overviewPayload.user.id, email: "", nickname: overviewPayload.user.nickname });
     }
 
-    if (!inspirationResponse.ok || !isCreatorInspirationsResponse(inspirationPayload)) {
-      setInspirationError(getApiErrorMessage(inspirationPayload, "创作灵感加载失败，请稍后重试。"));
-      setInspirations([]);
-    } else {
-      setInspirations(inspirationPayload.items);
-    }
-
     setStatus("idle");
+  }
+
+  async function loadDailyNews(authToken: string) {
+    setNewsStatus("loading");
+    setNewsSlow(false);
+    setNewsError("");
+
+    const slowTimer = window.setTimeout(() => setNewsSlow(true), 8000);
+
+    try {
+      const response = await apiFetch("/news/creator-daily", { authToken });
+
+      if (response.status === 401) {
+        clearAuthSession();
+        setToken(null);
+        setUser(null);
+        setOverview(null);
+        setDailyNews(null);
+        setStatus("idle");
+        setNewsStatus("idle");
+        return;
+      }
+
+      const payload = await readApiJson<CreatorDailyNewsResponse | { message?: string | string[] }>(response);
+      if (!response.ok || !isCreatorDailyNewsResponse(payload)) {
+        setDailyNews(null);
+        setNewsError(getApiErrorMessage(payload, "每日资讯加载失败，请稍后重试。"));
+        return;
+      }
+
+      setDailyNews(payload);
+    } catch {
+      setDailyNews(null);
+      setNewsError("无法连接每日资讯服务，请稍后重试。");
+    } finally {
+      window.clearTimeout(slowTimer);
+      setNewsStatus("idle");
+      setNewsSlow(false);
+    }
   }
 
   function logout() {
@@ -141,9 +183,10 @@ export default function CreatorHomePage() {
     setToken(null);
     setUser(null);
     setOverview(null);
-    setInspirations([]);
+    setDailyNews(null);
     setOverviewError("");
-    setInspirationError("");
+    setNewsError("");
+    setNewsSlow(false);
     setWithdrawError("");
     setDeleteError("");
     setPendingWithdrawArticleId("");
@@ -212,6 +255,18 @@ export default function CreatorHomePage() {
 
     setPendingDeleteDraftId("");
     await loadCreatorData(token);
+  }
+
+  function openDailyNewsInWorkspace(item: DailyNewsItem) {
+    const prefill = createWorkspacePrefillFromDailyNews(item);
+    const saved = writeWorkspacePrefillState(window.sessionStorage, prefill);
+
+    if (!saved) {
+      setNewsError("浏览器暂存不可用，无法把资讯内容带入工作台。请刷新后重试。");
+      return;
+    }
+
+    router.push("/workspace?prefill=creator-news");
   }
 
   return (
@@ -421,45 +476,14 @@ export default function CreatorHomePage() {
             />
           </section>
 
-          <aside className="h-fit rounded-lg bg-white px-5 py-6 lg:sticky lg:top-20">
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-xl font-semibold">创作灵感</h2>
-              <button
-                className="rounded-md px-2 py-1 text-sm font-medium text-[#8f959e] hover:bg-[#f6f7f9]"
-                type="button"
-                onClick={() => token && void loadCreatorData(token)}
-              >
-                换一组
-              </button>
-            </div>
-            {inspirationError ? (
-              <div className="mb-4 rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-3 py-2 text-sm text-[#d92d2d]">
-                {inspirationError}
-              </div>
-            ) : null}
-            {status === "loading" && !inspirations.length ? (
-              <div className="py-10 text-center text-sm text-[#8f959e]">AI 正在生成灵感...</div>
-            ) : null}
-            <div className="grid gap-2">
-              {inspirations.map((item) => (
-                <button
-                  className="group rounded-md border border-transparent px-2 py-4 text-left transition hover:border-[#ffd2d3] hover:bg-[#fff7f7]"
-                  key={item.id}
-                  type="button"
-                  onClick={() => router.push(buildWorkspaceTopicHref(item.topic))}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-[15px] font-semibold leading-7 text-[#1f2329]">#{item.topic}#</div>
-                      <div className="mt-1 text-xs font-medium text-[#ff4d4f]">{item.category}</div>
-                      <p className="mt-2 text-sm leading-6 text-[#6b7280]">{item.reason}</p>
-                    </div>
-                    <span className="pt-1 text-xl text-[#a8adb5] group-hover:text-[#ff4d4f]">›</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </aside>
+          <DailyNewsPanel
+            dailyNews={dailyNews}
+            error={newsError}
+            loading={newsStatus === "loading"}
+            slow={newsSlow}
+            onOpen={openDailyNewsInWorkspace}
+            onRefresh={() => token && void loadDailyNews(token)}
+          />
         </div>
       )}
     </main>
@@ -474,6 +498,142 @@ function MetricCard({ label, value, hint }: { label: string; value: string; hint
       <div className="mt-3 text-xs leading-5 text-[#8f959e]">{hint}</div>
     </div>
   );
+}
+
+function DailyNewsPanel({
+  dailyNews,
+  error,
+  loading,
+  slow,
+  onOpen,
+  onRefresh,
+}: {
+  dailyNews: CreatorDailyNewsResponse | null;
+  error: string;
+  loading: boolean;
+  slow: boolean;
+  onOpen: (item: DailyNewsItem) => void;
+  onRefresh: () => void;
+}) {
+  const aiNews = dailyNews?.aiNews ?? [];
+  const hotNews = dailyNews?.hotNews ?? [];
+
+  return (
+    <aside className="h-fit rounded-lg bg-white px-5 py-6 lg:sticky lg:top-20">
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">每日资讯</h2>
+          <p className="mt-1 text-xs text-[#8f959e]">{dailyNews?.date ?? "今日"} 选题素材</p>
+        </div>
+        <button
+          className="rounded-md px-2 py-1 text-sm font-medium text-[#8f959e] hover:bg-[#f6f7f9] disabled:opacity-50"
+          disabled={loading}
+          type="button"
+          onClick={onRefresh}
+        >
+          {loading ? "加载中" : "刷新"}
+        </button>
+      </div>
+
+      {error ? (
+        <div className="mb-4 rounded-md border border-[#ffd4d4] bg-[#fff6f6] px-3 py-2 text-sm text-[#d92d2d]">
+          {error}
+        </div>
+      ) : null}
+
+      {slow ? (
+        <div className="mb-4 rounded-md border border-[#ffe0ad] bg-[#fff9ec] px-3 py-2 text-sm leading-6 text-[#8a5b00]">
+          外部资讯接口响应较慢，可先进入工作台创作，或稍后刷新每日资讯。
+        </div>
+      ) : null}
+
+      {loading && !dailyNews ? (
+        <div className="grid gap-3">
+          {[0, 1, 2].map((item) => (
+            <div className="rounded-md bg-[#f6f7f9] px-3 py-4" key={item}>
+              <div className="h-4 w-3/4 rounded bg-[#eceef2]" />
+              <div className="mt-3 h-3 w-1/2 rounded bg-[#eceef2]" />
+              <div className="mt-4 h-3 w-full rounded bg-[#eceef2]" />
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {dailyNews ? (
+        <div className="grid gap-6">
+          <DailyNewsSection
+            emptyText="今日暂无重大 AI 资讯，建议稍晚再看。"
+            items={aiNews}
+            title="每日 AI 资讯"
+            onOpen={onOpen}
+          />
+          <DailyNewsSection
+            emptyText="今日热点资讯暂未返回，可以稍后刷新。"
+            items={hotNews}
+            title="每日热点资讯"
+            onOpen={onOpen}
+          />
+          <div className="rounded-md bg-[#fafafa] px-3 py-2 text-xs leading-5 text-[#8f959e]">
+            {getDailyNewsSourceLabel(dailyNews.source)}
+          </div>
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
+function DailyNewsSection({
+  emptyText,
+  items,
+  title,
+  onOpen,
+}: {
+  emptyText: string;
+  items: DailyNewsItem[];
+  title: string;
+  onOpen: (item: DailyNewsItem) => void;
+}) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-base font-semibold text-[#1f2329]">{title}</h3>
+        <span className="text-xs text-[#8f959e]">{items.length} 条</span>
+      </div>
+      {items.length ? (
+        <div className="grid gap-2">
+          {items.slice(0, 6).map((item) => (
+            <button
+              className="group rounded-md border border-transparent px-2 py-4 text-left transition hover:border-[#ffd2d3] hover:bg-[#fff7f7] focus:outline-none focus:ring-2 focus:ring-[#ffb6b7]"
+              key={item.id}
+              type="button"
+              onClick={() => onOpen(item)}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="line-clamp-2 text-[15px] font-semibold leading-7 text-[#1f2329]">{item.title}</div>
+                  <div className="mt-1 text-xs font-medium text-[#ff4d4f]">
+                    {item.source} · {item.date}
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-[#6b7280]">{item.summary}</p>
+                </div>
+                <span className="pt-1 text-xl text-[#a8adb5] group-hover:text-[#ff4d4f]">›</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-md border border-dashed border-[#dedede] px-3 py-6 text-center text-sm leading-6 text-[#8f959e]">
+          {emptyText}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function getDailyNewsSourceLabel(source: CreatorDailyNewsResponse["source"]) {
+  if (source === "cache") return "当前为最近缓存数据，外部接口恢复后可刷新获取实时资讯。";
+  if (source === "mock") return "当前为演示数据，可在外部接口不可用时保证创作链路继续运行。";
+  return "当前为实时接口数据。";
 }
 
 const contentFilters: Array<{ id: CreatorContentFilter; label: string }> = [
