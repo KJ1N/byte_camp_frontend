@@ -21,6 +21,25 @@ function createResponse() {
 }
 
 describe("AuditController", () => {
+  it("checks the requested draft for the current user", async () => {
+    const calls: Array<{ userId: string; draftId: string }> = [];
+    const publishService = {
+      checkDraft: async (userId: string, draftId: string) => {
+        calls.push({ userId, draftId });
+        return { decision: "PASS" };
+      },
+    };
+    const complianceRewriteService = {
+      streamComplianceRewrite: async function* (): AsyncGenerator<AiStreamEvent> {},
+    };
+    const controller = new AuditController(publishService as never, complianceRewriteService as never);
+
+    const result = await controller.check("user-1", { draftId: "draft-1" });
+
+    assert.deepEqual(calls, [{ userId: "user-1", draftId: "draft-1" }]);
+    assert.deepEqual(result, { decision: "PASS" });
+  });
+
   it("streams compliance rewrite events for the current user", async () => {
     const calls: Array<{ userId: string; draftId: string; auditRecordId?: string }> = [];
     const publishService = {
