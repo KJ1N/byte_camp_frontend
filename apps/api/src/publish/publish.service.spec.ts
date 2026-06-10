@@ -64,6 +64,10 @@ function createDraft(body: RichTextDocument, title = "AI 如何改变内容创�
     title,
     body,
     version: 1,
+    reviewStatus: "NEEDS_REVIEW",
+    reviewedVersion: null as number | null,
+    reviewAuditRecordId: null as string | null,
+    reviewScoreId: null as string | null,
     createdAt: new Date("2026-06-04T10:00:00.000Z"),
     updatedAt: new Date("2026-06-04T10:00:00.000Z"),
   };
@@ -116,11 +120,10 @@ function createService(
     draftTitle?: string;
     rejectAuditInsideTransaction?: boolean;
     rejectScoringInsideTransaction?: boolean;
-    transactionDraftVersion?: number;
+    assetAuditError?: Error;
   } = {},
 ) {
-  const draft = createDraft(body, options.draftTitle);
-  const transactionDraftVersion = options.transactionDraftVersion ?? draft.version;
+  let draft = createDraft(body, options.draftTitle);
   let inTransaction = false;
   const calls = {
     auditRecords: [] as Array<{ decision: AuditDecision }>,
@@ -139,52 +142,140 @@ function createService(
     revisions: [] as Array<{ title: string; body: RichTextDocument; reason?: string }>,
     draftUpdates: [] as Array<{ status: DraftStatus }>,
     rankingInvalidations: 0,
+    auditModelCalls: 0,
+    scoringModelCalls: 0,
   };
+  const auditRows: Array<{
+    id: string;
+    draftId: string;
+    articleId?: string;
+    decision: AuditDecision;
+    rawResult: unknown;
+    createdAt: Date;
+  }> = [];
+  const scoreRows: Array<{
+    id: string;
+    draftId: string;
+    articleId?: string;
+    contentValue: number;
+    expressionQuality: number;
+    readerExperience: number;
+    spreadPotential: number;
+    safetyScore: number;
+    overall: number;
+    reasons: unknown;
+    suggestions: unknown;
+    createdAt: Date;
+  }> = [];
 
   const tx = {
     draft: {
-      findFirst: async (args?: { where?: { version?: number } }) => {
-        if (args?.where?.version !== undefined && args.where.version !== transactionDraftVersion) {
-          return null;
-        }
-
-        return {
-          ...draft,
-          version: inTransaction ? transactionDraftVersion : draft.version,
+      findFirst: async (args?: {
+        where?: {
+          id?: string;
+          authorId?: string;
+          version?: number;
+          reviewStatus?: string;
+          reviewedVersion?: number;
+          reviewAuditRecordId?: string;
+          reviewScoreId?: string;
         };
+      }) => {
+        const where = args?.where;
+        if (where?.id !== undefined && where.id !== draft.id) return null;
+        if (where?.authorId !== undefined && where.authorId !== draft.authorId) return null;
+        if (where?.version !== undefined && where.version !== draft.version) return null;
+        if (where?.reviewStatus !== undefined && where.reviewStatus !== draft.reviewStatus) return null;
+        if (where?.reviewedVersion !== undefined && where.reviewedVersion !== draft.reviewedVersion) return null;
+        if (where?.reviewAuditRecordId !== undefined && where.reviewAuditRecordId !== draft.reviewAuditRecordId) return null;
+        if (where?.reviewScoreId !== undefined && where.reviewScoreId !== draft.reviewScoreId) return null;
+        return draft;
       },
-      update: async ({ data }: { data: { status: DraftStatus } }) => {
-        calls.draftUpdates.push({ status: data.status });
-        return { ...draft, status: data.status };
+      update: async ({ data }: { data: Partial<typeof draft> & { status?: DraftStatus } }) => {
+        if (data.status) calls.draftUpdates.push({ status: data.status });
+        draft = { ...draft, ...data };
+        return draft;
+      },
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: {
+          id: string;
+          version: number;
+          reviewedVersion: number;
+          reviewAuditRecordId: string;
+        };
+        data: Partial<typeof draft>;
+      }) => {
+        if (
+          where.id !== draft.id ||
+          where.version !== draft.version ||
+          where.reviewedVersion !== draft.reviewedVersion ||
+          where.reviewAuditRecordId !== draft.reviewAuditRecordId
+        ) {
+          return { count: 0 };
+        }
+        draft = { ...draft, ...data };
+        return { count: 1 };
       },
     },
     auditRecord: {
-      create: async ({ data }: { data: { decision: AuditDecision; stage?: string } }) => {
+      create: async ({
+        data,
+      }: {
+        data: { draftId: string; decision: AuditDecision; stage?: string; rawResult: unknown };
+      }) => {
         calls.auditRecords.push({ decision: data.decision });
         if (data.stage) calls.auditRecordStages.push(data.stage);
-        return {
+        const record = {
           id: `audit-${calls.auditRecords.length}`,
           createdAt: new Date("2026-06-04T10:00:00.000Z"),
           ...data,
         };
+        auditRows.push(record);
+        return record;
+      },
+      findFirst: async ({ where }: { where: { id: string; draftId: string; decision: AuditDecision } }) => {
+        return (
+          auditRows.find(
+            (record) =>
+              record.id === where.id &&
+              record.draftId === where.draftId &&
+              record.decision === where.decision,
+          ) ?? null
+        );
       },
       update: async ({ where, data }: { where: { id: string }; data: { articleId: string } }) => {
         calls.auditRecordArticleLinks.push({ id: where.id, articleId: data.articleId });
-        return { id: where.id, createdAt: new Date("2026-06-04T10:00:00.000Z"), ...data };
+        const record = auditRows.find((item) => item.id === where.id);
+        if (record) record.articleId = data.articleId;
+        return { ...record, id: where.id, ...data };
       },
     },
     qualityScore: {
-      create: async ({ data }: { data: { overall: number } }) => {
+      create: async ({
+        data,
+      }: {
+        data: Omit<(typeof scoreRows)[number], "id" | "createdAt">;
+      }) => {
         calls.qualityScores.push({ overall: data.overall });
-        return {
+        const record = {
           id: `score-${calls.qualityScores.length}`,
           createdAt: new Date("2026-06-04T10:00:00.000Z"),
           ...data,
         };
+        scoreRows.push(record);
+        return record;
+      },
+      findFirst: async ({ where }: { where: { id: string; draftId: string } }) => {
+        return scoreRows.find((record) => record.id === where.id && record.draftId === where.draftId) ?? null;
       },
       update: async ({ where, data }: { where: { id: string }; data: { articleId: string } }) => {
         calls.qualityScoreArticleLinks.push({ id: where.id, articleId: data.articleId });
-        return { id: where.id, createdAt: new Date("2026-06-04T10:00:00.000Z"), ...data };
+        const record = scoreRows.find((item) => item.id === where.id);
+        if (record) record.articleId = data.articleId;
+        return { ...record, id: where.id, ...data };
       },
     },
     article: {
@@ -242,6 +333,7 @@ function createService(
 
   const auditService = new AuditService({
     auditContent: async (text: string) => {
+      calls.auditModelCalls += 1;
       if (options.rejectAuditInsideTransaction && inTransaction) {
         throw new Error("Audit should run before opening the Prisma transaction");
       }
@@ -251,6 +343,7 @@ function createService(
   } as never);
   const scoringService = {
     scoreArticle: async (input: { title: string; text: string; safetyScore?: number }) => {
+      calls.scoringModelCalls += 1;
       if (options.rejectScoringInsideTransaction && inTransaction) {
         throw new Error("Scoring should run before opening the Prisma transaction");
       }
@@ -264,6 +357,13 @@ function createService(
       return true;
     },
   };
+  const assetAuditService = options.assetAuditError
+    ? {
+        auditGeneratedImage: async () => {
+          throw options.assetAuditError;
+        },
+      }
+    : undefined;
 
   return {
     service: new PublishService(
@@ -272,8 +372,19 @@ function createService(
       scoringService as never,
       new RankingService(),
       rankingCache as unknown as RankingCacheService,
+      assetAuditService as never,
     ),
     calls,
+    changeDraft: () => {
+      draft = {
+        ...draft,
+        version: draft.version + 1,
+        reviewStatus: "NEEDS_REVIEW",
+        reviewedVersion: null,
+        reviewAuditRecordId: null,
+        reviewScoreId: null,
+      };
+    },
   };
 }
 
@@ -432,6 +543,12 @@ function createLegacyArticleDetailService() {
   return new PublishService(prisma as never, createAuditService(), new ScoringService());
 }
 
+async function reviewDraft(service: PublishService) {
+  const audit = await service.checkDraft("user-1", "draft-1");
+  const score = await service.scoreDraft("user-1", "draft-1");
+  return { audit, score };
+}
+
 describe("PublishService", () => {
   it("checks a draft and persists the audit record", async () => {
     const { service, calls } = createService(warnBody);
@@ -458,6 +575,18 @@ describe("PublishService", () => {
     assert.equal(calls.auditRecords.length, 3);
   });
 
+  it("returns a friendly image warning instead of exposing an internal audit error", async () => {
+    const { service } = createService(imageBody, {
+      assetAuditError: new Error("(parsed.categories ?? []).filter is not a function"),
+    });
+
+    const result = await service.checkDraft("user-1", "draft-1");
+
+    assert.equal(result.result.decision, AuditDecision.Warn);
+    assert.equal(result.result.evidence[0].reason, "图片下载或视觉审核失败，请稍后重试或替换图片。");
+    assert.doesNotMatch(result.result.evidence[0].reason, /filter is not a function/);
+  });
+
   it("scores a draft and persists the quality score", async () => {
     const { service, calls } = createService(safeBody);
 
@@ -471,6 +600,9 @@ describe("PublishService", () => {
 
   it("publishes a passing draft and creates the article snapshot", async () => {
     const { service, calls } = createService(safeBody);
+    await reviewDraft(service);
+    const auditCallsBeforePublish = calls.auditModelCalls;
+    const scoringCallsBeforePublish = calls.scoringModelCalls;
 
     const result = await service.publishDraft("user-1", "draft-1");
 
@@ -484,10 +616,13 @@ describe("PublishService", () => {
     assert.deepEqual(calls.auditRecordArticleLinks, [{ id: "audit-1", articleId: "article-1" }]);
     assert.deepEqual(calls.qualityScoreArticleLinks, [{ id: "score-1", articleId: "article-1" }]);
     assert.equal(calls.rankingInvalidations, 1);
+    assert.equal(calls.auditModelCalls, auditCallsBeforePublish);
+    assert.equal(calls.scoringModelCalls, scoringCallsBeforePublish);
   });
 
   it("runs model audit before opening the publish transaction", async () => {
     const { service } = createService(safeBody, { rejectAuditInsideTransaction: true });
+    await reviewDraft(service);
 
     const result = await service.publishDraft("user-1", "draft-1");
 
@@ -496,6 +631,7 @@ describe("PublishService", () => {
 
   it("runs model scoring before opening the publish transaction", async () => {
     const { service } = createService(safeBody, { rejectScoringInsideTransaction: true });
+    await reviewDraft(service);
 
     const result = await service.publishDraft("user-1", "draft-1");
 
@@ -503,14 +639,14 @@ describe("PublishService", () => {
   });
 
   it("rejects publishing when the draft changes after model audit", async () => {
-    const { service, calls } = createService(safeBody, { transactionDraftVersion: 2 });
+    const { service, calls, changeDraft } = createService(safeBody);
+    await reviewDraft(service);
+    changeDraft();
 
     await assert.rejects(
       () => service.publishDraft("user-1", "draft-1"),
-      /Draft changed after audit/,
+      /草稿内容已变化或尚未完成审核/,
     );
-    assert.equal(calls.auditRecords.length, 0);
-    assert.equal(calls.qualityScores.length, 0);
     assert.equal(calls.articles.length, 0);
   });
 
@@ -528,6 +664,7 @@ describe("PublishService", () => {
       existingArticleId: "article-1",
       draftTitle: "Updated published article",
     });
+    await reviewDraft(service);
 
     const result = await service.publishDraft("user-1", "draft-1");
 
@@ -556,12 +693,12 @@ describe("PublishService", () => {
 
   it("keeps a warn draft unpublished and returns revision guidance", async () => {
     const { service, calls } = createService(warnBody);
+    await reviewDraft(service);
 
-    const result = await service.publishDraft("user-1", "draft-1");
-
-    assert.equal(result.status, "NEEDS_REVISION");
-    assert.equal(result.articleId, undefined);
-    assert.equal(result.audit.result.decision, AuditDecision.Warn);
+    await assert.rejects(
+      () => service.publishDraft("user-1", "draft-1"),
+      /尚未完成审核/,
+    );
     assert.equal(calls.articles.length, 0);
     assert.equal(calls.revisions.length, 0);
     assert.equal(calls.draftUpdates.length, 0);
@@ -569,12 +706,12 @@ describe("PublishService", () => {
 
   it("blocks high-risk drafts without creating an article", async () => {
     const { service, calls } = createService(blockBody);
+    await reviewDraft(service);
 
-    const result = await service.publishDraft("user-1", "draft-1");
-
-    assert.equal(result.status, "BLOCKED");
-    assert.equal(result.articleId, undefined);
-    assert.equal(result.audit.result.decision, AuditDecision.Block);
+    await assert.rejects(
+      () => service.publishDraft("user-1", "draft-1"),
+      /尚未完成审核/,
+    );
     assert.equal(calls.articles.length, 0);
     assert.equal(calls.draftUpdates.length, 0);
   });

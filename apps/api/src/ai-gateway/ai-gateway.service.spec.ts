@@ -102,6 +102,21 @@ function createRequestLogger() {
   };
 }
 
+function createGeneratedImageStorage() {
+  const calls: Array<{ userId: string; sourceUrl: string }> = [];
+
+  return {
+    calls,
+    storeGeneratedImage: async (userId: string, sourceUrl: string) => {
+      calls.push({ userId, sourceUrl });
+      return {
+        key: `generated-images/${userId}/stored.png`,
+        url: `https://api.example.test/assets/generated/${userId}/stored.png/view`,
+      };
+    },
+  };
+}
+
 const liveConfig = createConfig({
   AI_PROVIDER_MODE: "live",
   AI_API_KEY: "test-key",
@@ -388,6 +403,7 @@ describe("AiGatewayService", () => {
         ],
       }),
     );
+    const generatedImageStorage = createGeneratedImageStorage();
     const service = new ServiceCtor(
       createConfig({
         AI_PROVIDER_MODE: "live",
@@ -398,6 +414,8 @@ describe("AiGatewayService", () => {
       }),
       createPromptsService(),
       provider,
+      undefined,
+      generatedImageStorage,
     );
 
     const events: Array<{ event: string; data: Record<string, unknown> }> = [];
@@ -412,9 +430,58 @@ describe("AiGatewayService", () => {
     assert.match(provider.calls[0].messages[1].content, /Image prompt template/);
     assert.equal(provider.imageCalls.length, 1);
     assert.equal(provider.imageCalls[0].model, "doubao-seedream-4-5-251128");
+    assert.deepEqual(generatedImageStorage.calls, [
+      { userId: "user-1", sourceUrl: "https://example.test/generated-1.png" },
+    ]);
     assert.match(provider.imageCalls[0].prompt, /外滩租界街景/);
     assert.equal(events.some((event) => event.event === "image"), true);
+    assert.equal(
+      (events.find((event) => event.event === "image")!.data as { url: string }).url,
+      "https://api.example.test/assets/generated/user-1/stored.png/view",
+    );
     assert.equal((events.at(-1)!.data.images as Array<{ status: string }>)[0].status, "completed");
+  });
+
+  it("marks a generated image as failed when permanent storage fails", async () => {
+    const provider = createMultimodalProvider(
+      JSON.stringify({
+        title: "Generated article",
+        outline: ["Section"],
+        bodyText: "Article body.",
+        images: [{ prompt: "city street", caption: "street", alt: "street" }],
+      }),
+    );
+    const service = new ServiceCtor(
+      createConfig({
+        AI_PROVIDER_MODE: "live",
+        AI_API_KEY: "test-key",
+        AI_MODEL: "test-model",
+        AI_BASE_URL: "https://example.test/api/v3",
+        AI_IMAGE_MODEL: "doubao-seedream-4-5-251128",
+      }),
+      createPromptsService(),
+      provider,
+      undefined,
+      {
+        storeGeneratedImage: async () => {
+          throw new Error("OSS upload failed");
+        },
+      },
+    );
+
+    const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+    for await (const event of service.streamMultimodalDraft(
+      { ...generationInput, imageCount: 1 },
+      "user-1",
+    )) {
+      events.push(event);
+    }
+
+    assert.equal(events.some((event) => event.event === "image"), false);
+    assert.equal(events.some((event) => event.event === "image-status" && event.data.status === "failed"), true);
+    const images = events.at(-1)!.data.images as Array<{ status: string; url?: string }>;
+    assert.equal(images[0].status, "failed");
+    assert.equal(images[0].url, undefined);
   });
 
   it("streams mock title candidates one by one", async () => {

@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException, Optional } from "@nestjs/common";
+import { ConflictException, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
 import {
   ArticleStatus,
@@ -41,6 +41,8 @@ interface DraftImageAuditTarget {
 
 @Injectable()
 export class PublishService {
+  private readonly logger = new Logger(PublishService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
@@ -55,7 +57,28 @@ export class PublishService {
     const auditBundle = await this.auditDraftContent(draft.title, body, text);
 
     return this.prisma.$transaction(async (tx) => {
-      return this.createAuditRecords(tx, draft.id, auditBundle);
+      await this.assertDraftUnchanged(tx, draft.id, draft.version);
+      const audit = await this.createAuditRecords(tx, draft.id, auditBundle);
+      const passed = audit.result.decision === AuditDecision.Pass;
+
+      await tx.draft.update({
+        where: { id: draft.id },
+        data: passed
+          ? {
+              reviewStatus: "NEEDS_REVIEW",
+              reviewedVersion: draft.version,
+              reviewAuditRecordId: audit.recordId,
+              reviewScoreId: null,
+            }
+          : {
+              reviewStatus: "NEEDS_REVIEW",
+              reviewedVersion: null,
+              reviewAuditRecordId: null,
+              reviewScoreId: null,
+            },
+      });
+
+      return audit;
     });
   }
 
@@ -67,7 +90,29 @@ export class PublishService {
     });
 
     return this.prisma.$transaction(async (tx) => {
-      return this.createQualityScore(tx, draft.id, result);
+      await this.assertDraftUnchanged(tx, draft.id, draft.version);
+      const score = await this.createQualityScore(tx, draft.id, result);
+
+      if (draft.reviewedVersion === draft.version && draft.reviewAuditRecordId) {
+        const update = await tx.draft.updateMany({
+          where: {
+            id: draft.id,
+            version: draft.version,
+            reviewedVersion: draft.version,
+            reviewAuditRecordId: draft.reviewAuditRecordId,
+          },
+          data: {
+            reviewStatus: "REVIEWED",
+            reviewScoreId: score.scoreId,
+          },
+        });
+
+        if (update.count !== 1) {
+          throw new ConflictException("草稿在审核评分期间发生变化，请重新审核。");
+        }
+      }
+
+      return score;
     });
   }
 
@@ -143,38 +188,55 @@ export class PublishService {
 
   async publishDraft(authorId: string, draftId: string): Promise<PublishArticleResponse> {
     const { draft, body, text } = await this.loadDraftText(this.prisma, authorId, draftId);
-    const auditBundle = await this.auditDraftContent(draft.title, body, text);
-    const auditResult = auditBundle.aggregate;
-    const scoreResult = await this.scoringService.scoreArticle({
-      title: draft.title,
-      text,
-      safetyScore: this.safetyScoreFor(auditResult.decision),
-    });
+    if (
+      draft.reviewStatus !== "REVIEWED" ||
+      draft.reviewedVersion !== draft.version ||
+      !draft.reviewAuditRecordId ||
+      !draft.reviewScoreId
+    ) {
+      throw new ConflictException("草稿内容已变化或尚未完成审核，请重新审核后发布。");
+    }
+    const reviewAuditRecordId = draft.reviewAuditRecordId;
+    const reviewScoreId = draft.reviewScoreId;
 
     const result = await this.prisma.$transaction<PublishArticleResponse>(async (tx) => {
-      await this.assertDraftUnchanged(tx, draft.id, draft.version);
+      const reviewedDraft = await tx.draft.findFirst({
+        where: {
+          id: draft.id,
+          authorId,
+          version: draft.version,
+          reviewStatus: "REVIEWED",
+          reviewedVersion: draft.version,
+          reviewAuditRecordId,
+          reviewScoreId,
+        },
+        select: { id: true },
+      });
 
-      const audit = await this.createAuditRecords(tx, draft.id, auditBundle);
-      const score = await this.createQualityScore(tx, draft.id, scoreResult);
-
-      if (auditResult.decision === AuditDecision.Block) {
-        return {
-          status: "BLOCKED",
-          audit,
-          score,
-          message: "内容命中高风险规则，已阻止发布。",
-        };
+      if (!reviewedDraft) {
+        throw new ConflictException("草稿内容已变化，请重新审核后发布。");
       }
 
-      if (auditResult.decision === AuditDecision.Warn) {
-        return {
-          status: "NEEDS_REVISION",
-          audit,
-          score,
-          message: "内容需要修改后重新审核。",
-        };
+      const auditRecord = await tx.auditRecord.findFirst({
+        where: {
+          id: reviewAuditRecordId,
+          draftId: draft.id,
+          decision: AuditDecision.Pass,
+        },
+      });
+      const scoreRecord = await tx.qualityScore.findFirst({
+        where: {
+          id: reviewScoreId,
+          draftId: draft.id,
+        },
+      });
+
+      if (!auditRecord || !scoreRecord) {
+        throw new ConflictException("审核记录已失效，请重新审核后发布。");
       }
 
+      const audit = this.auditResponseFromRecord(auditRecord);
+      const score = this.scoreResponseFromRecord(scoreRecord);
       const existingArticle = await tx.article.findFirst({
         where: { draftId: draft.id, status: ArticleStatus.Published },
         select: { id: true },
@@ -328,10 +390,9 @@ export class PublishService {
         [`图片 ${index + 1}`, target.alt, target.caption, target.prompt, target.src].filter(Boolean).join("\n"),
       );
     } catch (error) {
-      return this.createImageAuditWarn(
-        index,
-        error instanceof Error ? error.message : "图片审核失败，请重试后再发布。",
-      );
+      const details = error instanceof Error ? error.stack ?? error.message : String(error);
+      this.logger.warn(`第 ${index + 1} 张图片审核失败：${details}`);
+      return this.createImageAuditWarn(index, "图片下载或视觉审核失败，请稍后重试或替换图片。");
     }
   }
 
@@ -555,10 +616,42 @@ export class PublishService {
     });
   }
 
-  private safetyScoreFor(decision: AuditDecision) {
-    if (decision === AuditDecision.Block) return 20;
-    if (decision === AuditDecision.Warn) return 65;
-    return 95;
+  private auditResponseFromRecord(record: {
+    id: string;
+    rawResult: Prisma.JsonValue;
+    createdAt: Date;
+  }): AuditCheckResponse {
+    return {
+      recordId: record.id,
+      result: record.rawResult as unknown as AuditResult,
+      createdAt: record.createdAt.toISOString(),
+    };
+  }
+
+  private scoreResponseFromRecord(record: {
+    id: string;
+    contentValue: number;
+    expressionQuality: number;
+    readerExperience: number;
+    spreadPotential: number;
+    safetyScore: number;
+    overall: number;
+    reasons: Prisma.JsonValue;
+    suggestions: Prisma.JsonValue;
+    createdAt: Date;
+  }): ScoringArticleResponse {
+    return {
+      scoreId: record.id,
+      contentValue: record.contentValue,
+      expressionQuality: record.expressionQuality,
+      readerExperience: record.readerExperience,
+      spreadPotential: record.spreadPotential,
+      safetyScore: record.safetyScore,
+      overall: record.overall,
+      reasons: this.asStringArray(record.reasons),
+      suggestions: this.asStringArray(record.suggestions),
+      createdAt: record.createdAt.toISOString(),
+    };
   }
 
   private createSummary(text: string) {

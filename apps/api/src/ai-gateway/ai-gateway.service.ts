@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Optional } from "@nestjs/common";
+import { BadRequestException, Injectable, Optional, ServiceUnavailableException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type {
   AiStreamEvent,
@@ -20,6 +20,7 @@ import type {
   RewriteArticleResponse,
 } from "@bytecamp-aigc/shared";
 import { AuditDecision, RiskCategory, qualityWeights } from "@bytecamp-aigc/shared";
+import { GeneratedImageStorageService } from "../assets/generated-image-storage.service";
 import { PromptsService } from "../prompts/prompts.service";
 import {
   AiProviderClient,
@@ -159,6 +160,7 @@ export class AiGatewayService {
     @Optional() private readonly promptsService?: PromptsService,
     @Optional() private readonly providerClient?: AiProviderClient,
     @Optional() private readonly requestLogger?: AiRequestLogger,
+    @Optional() private readonly generatedImageStorage?: GeneratedImageStorageService,
   ) {}
 
   async generateArticleDraft(input: GenerateArticleInput, userId?: string): Promise<GeneratedArticleDraft> {
@@ -351,7 +353,7 @@ export class AiGatewayService {
         yield { event: "image-status", data: { index, status: "generating" } };
 
         const image = shouldUseLiveProvider
-          ? await this.generateLiveImageResult(imagePlan, index)
+          ? await this.generateLiveImageResult(imagePlan, index, userId)
           : this.generateMockImageResult(imagePlan, index);
 
         imageResults.push(image);
@@ -590,6 +592,7 @@ export class AiGatewayService {
   private async generateLiveImageResult(
     plan: MultimodalImagePlan,
     index: number,
+    userId: string,
   ): Promise<MultimodalImageResult> {
     const imageMetric = this.createAiRequestMetric("image_generation", "live", this.getConfiguredImageModel());
 
@@ -598,12 +601,16 @@ export class AiGatewayService {
         ...this.getRequiredImageProviderConfig(),
         prompt: plan.prompt,
       });
+      if (!this.generatedImageStorage) {
+        throw new ServiceUnavailableException("AI 生成图片存储服务未配置。");
+      }
+      const storedImage = await this.generatedImageStorage.storeGeneratedImage(userId, completion.url);
       const result: GeneratedImageResult = {
         ...plan,
         index,
         status: "completed",
         model: completion.model,
-        url: completion.url,
+        url: storedImage.url,
       };
 
       this.logAiRequestSuccess(imageMetric, completion.model);

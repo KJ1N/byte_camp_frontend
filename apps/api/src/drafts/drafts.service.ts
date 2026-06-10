@@ -91,6 +91,10 @@ export class DraftsService {
           title,
           body: body as unknown as Prisma.InputJsonValue,
           version: { increment: 1 },
+          reviewStatus: "NEEDS_REVIEW",
+          reviewedVersion: null,
+          reviewAuditRecordId: null,
+          reviewScoreId: null,
         },
       });
 
@@ -164,6 +168,10 @@ export class DraftsService {
           title: version.title,
           body: snapshot as unknown as Prisma.InputJsonValue,
           version: { increment: 1 },
+          reviewStatus: "NEEDS_REVIEW",
+          reviewedVersion: null,
+          reviewAuditRecordId: null,
+          reviewScoreId: null,
         },
       });
 

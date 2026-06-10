@@ -3,7 +3,7 @@ import { AnalyticsModule } from "../analytics/analytics.module";
 import { AuditController } from "../audit/audit.controller";
 import { AuditModule } from "../audit/audit.module";
 import { AuthModule } from "../auth/auth.module";
-import { AssetAuditService } from "../assets/asset-audit.service";
+import { AssetStorageModule } from "../assets/asset-storage.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { RankingModule } from "../ranking/ranking.module";
 import { ScoringController } from "../scoring/scoring.controller";
@@ -12,8 +12,8 @@ import { PublishController } from "./publish.controller";
 import { PublishService } from "./publish.service";
 
 @Module({
-  imports: [AuthModule, PrismaModule, AuditModule, ScoringModule, AnalyticsModule, RankingModule],
+  imports: [AuthModule, PrismaModule, AuditModule, ScoringModule, AnalyticsModule, RankingModule, AssetStorageModule],
   controllers: [AuditController, ScoringController, PublishController],
-  providers: [PublishService, AssetAuditService],
+  providers: [PublishService],
 })
 export class PublishModule {}

@@ -17,10 +17,14 @@ import type { CreateAssetFolderInput, RenameAssetFolderInput } from "@bytecamp-a
 import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/auth.guard";
 import { AssetsService, type UploadedAssetFile } from "./assets.service";
+import { GeneratedImageStorageService } from "./generated-image-storage.service";
 
 @Controller("assets")
 export class AssetsController {
-  constructor(private readonly assetsService: AssetsService) {}
+  constructor(
+    private readonly assetsService: AssetsService,
+    private readonly generatedImageStorage: GeneratedImageStorageService,
+  ) {}
 
   @Get("folders")
   @UseGuards(JwtAuthGuard)
@@ -67,6 +71,15 @@ export class AssetsController {
   @Redirect()
   async view(@Param("id") assetId: string) {
     return { url: await this.assetsService.getAssetReadUrl(assetId), statusCode: 302 };
+  }
+
+  @Get("generated/:userId/:filename/view")
+  @Redirect()
+  viewGenerated(@Param("userId") userId: string, @Param("filename") filename: string) {
+    return {
+      url: this.generatedImageStorage.getGeneratedImageReadUrl(userId, filename),
+      statusCode: 302,
+    };
   }
 
   @Delete(":id")

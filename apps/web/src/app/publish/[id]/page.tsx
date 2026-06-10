@@ -161,6 +161,15 @@ export default function PublishConfirmPage() {
     const payload = await readApiJson<PublishArticleResponse | { message?: string | string[] }>(response);
 
     if (!response.ok || !isPublishArticleResponse(payload)) {
+      if (response.status === 409) {
+        setAudit(null);
+        setScore(null);
+        setPublishResult(null);
+        setError(getApiErrorMessage(payload, "草稿内容已变化，请重新审核后发布。"));
+        setState("ready");
+        return;
+      }
+
       setError(getApiErrorMessage(payload, "发布失败，请稍后重试。"));
       setState("error");
       return;

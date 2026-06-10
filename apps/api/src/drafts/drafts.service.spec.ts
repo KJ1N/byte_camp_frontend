@@ -23,6 +23,10 @@ function createDraft(status = DraftStatus.Draft) {
     title: "当前标题",
     body: currentBody,
     version: 4,
+    reviewStatus: "REVIEWED",
+    reviewedVersion: 4,
+    reviewAuditRecordId: "audit-4",
+    reviewScoreId: "score-4",
     createdAt: new Date("2026-06-04T10:00:00.000Z"),
     updatedAt: new Date("2026-06-04T10:10:00.000Z"),
   };
@@ -43,7 +47,15 @@ function createService(options: { draft?: ReturnType<typeof createDraft> | null;
   const draft = options.draft === undefined ? createDraft() : options.draft;
   const version = options.version === undefined ? createVersion() : options.version;
   const calls = {
-    draftUpdates: [] as Array<{ title: string; body: RichTextDocument; version: { increment: number } }>,
+    draftUpdates: [] as Array<{
+      title: string;
+      body: RichTextDocument;
+      version: { increment: number };
+      reviewStatus: string;
+      reviewedVersion: null;
+      reviewAuditRecordId: null;
+      reviewScoreId: null;
+    }>,
     versionCreates: [] as Array<{ draftId: string; title: string; snapshot: RichTextDocument; version: number }>,
     draftDeletes: [] as string[],
   };
@@ -51,11 +63,27 @@ function createService(options: { draft?: ReturnType<typeof createDraft> | null;
   const tx = {
     draft: {
       findFirst: async () => draft,
-      update: async ({ data }: { data: { title: string; body: unknown; version: { increment: number } } }) => {
+      update: async ({
+        data,
+      }: {
+        data: {
+          title: string;
+          body: unknown;
+          version: { increment: number };
+          reviewStatus: string;
+          reviewedVersion: null;
+          reviewAuditRecordId: null;
+          reviewScoreId: null;
+        };
+      }) => {
         calls.draftUpdates.push({
           title: data.title,
           body: data.body as RichTextDocument,
           version: data.version,
+          reviewStatus: data.reviewStatus,
+          reviewedVersion: data.reviewedVersion,
+          reviewAuditRecordId: data.reviewAuditRecordId,
+          reviewScoreId: data.reviewScoreId,
         });
 
         return {
@@ -63,6 +91,10 @@ function createService(options: { draft?: ReturnType<typeof createDraft> | null;
           title: data.title,
           body: data.body,
           version: (draft?.version ?? 0) + data.version.increment,
+          reviewStatus: data.reviewStatus,
+          reviewedVersion: data.reviewedVersion,
+          reviewAuditRecordId: data.reviewAuditRecordId,
+          reviewScoreId: data.reviewScoreId,
           updatedAt: new Date("2026-06-04T10:20:00.000Z"),
         };
       },
@@ -111,6 +143,10 @@ describe("DraftsService.restoreVersion", () => {
         title: "历史标题",
         body: restoredBody,
         version: { increment: 1 },
+        reviewStatus: "NEEDS_REVIEW",
+        reviewedVersion: null,
+        reviewAuditRecordId: null,
+        reviewScoreId: null,
       },
     ]);
     assert.deepEqual(calls.versionCreates, [
@@ -121,6 +157,21 @@ describe("DraftsService.restoreVersion", () => {
         version: 5,
       },
     ]);
+  });
+
+  it("invalidates the reviewed tag when the draft content is saved", async () => {
+    const { service, calls } = createService();
+
+    const result = await service.updateDraft("user-1", "draft-1", {
+      title: "修改后的标题",
+      body: restoredBody,
+    });
+
+    assert.equal(result.version, 5);
+    assert.equal(calls.draftUpdates[0].reviewStatus, "NEEDS_REVIEW");
+    assert.equal(calls.draftUpdates[0].reviewedVersion, null);
+    assert.equal(calls.draftUpdates[0].reviewAuditRecordId, null);
+    assert.equal(calls.draftUpdates[0].reviewScoreId, null);
   });
 
   it("rejects restoring a draft that does not belong to the current user", async () => {

@@ -19,6 +19,11 @@ enum DraftStatus {
   REJECTED
 }
 
+enum DraftReviewStatus {
+  NEEDS_REVIEW
+  REVIEWED
+}
+
 enum PromptOwner {
   PLATFORM
   PRIVATE
@@ -54,15 +59,19 @@ model User {
 }
 
 model Draft {
-  id        String      @id @default(cuid())
-  authorId  String
-  mode      DraftMode   @default(FAST)
-  status    DraftStatus @default(DRAFT)
-  title     String
-  body      Json
-  version   Int         @default(1)
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  id                  String            @id @default(cuid())
+  authorId            String
+  mode                DraftMode         @default(FAST)
+  status              DraftStatus       @default(DRAFT)
+  reviewStatus        DraftReviewStatus @default(NEEDS_REVIEW)
+  reviewedVersion     Int?
+  reviewAuditRecordId String?
+  reviewScoreId       String?
+  title               String
+  body                Json
+  version             Int               @default(1)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
 
   author       User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
   versions     DraftVersion[]
