@@ -1,11 +1,17 @@
-import { Injectable, ServiceUnavailableException } from "@nestjs/common";
+import { Injectable, Optional, ServiceUnavailableException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { CreatorDailyNewsResponse, DailyNewsItem, DailyNewsProviderSource } from "@bytecamp-aigc/shared";
+import {
+  NewsCacheService,
+  type DailyNewsSnapshot,
+  type DailyNewsSnapshotKind,
+} from "./news-cache.service";
 
 type NewsProviderMode = "auto" | "live" | "mock";
 
 interface DailyNewsRequest {
   date?: string;
+  refresh?: boolean;
 }
 
 interface AiNewsPayload {
@@ -25,25 +31,37 @@ interface HotNewsPayload {
   };
 }
 
+interface DailyNewsResult {
+  date: string;
+  items: DailyNewsItem[];
+  emptyDate?: string;
+  fromCache?: boolean;
+}
+
 const providerSource: DailyNewsProviderSource = "60s.viki.moe";
 const defaultBaseUrl = "https://60s.viki.moe";
 const defaultTimeoutMs = 12_000;
 
 @Injectable()
 export class NewsService {
-  private cachedResponse: CreatorDailyNewsResponse | null = null;
+  private readonly cachedResponses = new Map<string, CreatorDailyNewsResponse>();
+  private readonly cachedDailySnapshots = new Map<string, DailyNewsSnapshot>();
+  private readonly cachedLatestSnapshots = new Map<DailyNewsSnapshotKind, DailyNewsSnapshot>();
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    @Optional()
+    private readonly newsCache?: NewsCacheService,
+  ) {}
 
   async getCreatorDailyNews(request: DailyNewsRequest = {}): Promise<CreatorDailyNewsResponse> {
     const mode = this.getProviderMode();
-    if (mode === "mock") return this.createMockResponse(request.date);
+    const requestDate = request.date ?? this.today();
+    if (mode === "mock") return this.createMockResponse(requestDate);
 
     try {
-      const liveResponse = await this.fetchLiveDailyNews(request);
-      if (liveResponse.aiNews.length || liveResponse.hotNews.length) {
-        this.cachedResponse = liveResponse;
-      }
+      const liveResponse = await this.fetchLiveDailyNews({ date: requestDate, refresh: request.refresh });
+      this.cacheLiveResponse(liveResponse);
       return liveResponse;
     } catch (error) {
       if (mode === "live") {
@@ -52,46 +70,78 @@ export class NewsService {
         );
       }
 
-      if (this.cachedResponse) {
-        return {
-          ...this.cachedResponse,
-          source: "cache",
-          aiNews: this.cachedResponse.aiNews.map((item) => ({ ...item })),
-          hotNews: this.cachedResponse.hotNews.map((item) => ({ ...item })),
-        };
+      const cachedResponse = this.getCachedResponse(requestDate);
+      if (cachedResponse) {
+        return this.cloneResponse(cachedResponse, "cache");
       }
 
-      return this.createMockResponse(request.date);
+      throw new ServiceUnavailableException(
+        error instanceof Error ? error.message : "Daily news provider is unavailable",
+      );
     }
   }
 
   private async fetchLiveDailyNews(request: DailyNewsRequest): Promise<CreatorDailyNewsResponse> {
+    const requestDate = request.date ?? this.today();
     const [aiResult, hotResult] = await Promise.allSettled([
-      this.fetchAiNews(request.date),
-      this.fetchHotNews(request.date),
+      this.resolveNewsKind("ai", requestDate, Boolean(request.refresh), () => this.fetchAiNews(requestDate)),
+      this.resolveNewsKind("hot", requestDate, Boolean(request.refresh), () => this.fetchHotNews(requestDate)),
     ]);
 
-    if (aiResult.status === "rejected" && hotResult.status === "rejected") {
-      throw new Error("Daily AI and hot news providers are unavailable");
+    if (aiResult.status === "rejected" || hotResult.status === "rejected") {
+      throw new Error("Daily news provider returned incomplete data");
     }
 
-    const aiNews = aiResult.status === "fulfilled" ? aiResult.value.items : [];
-    const hotNews = hotResult.status === "fulfilled" ? hotResult.value.items : [];
-    const date =
-      request.date ??
-      (aiResult.status === "fulfilled" ? aiResult.value.date : undefined) ??
-      (hotResult.status === "fulfilled" ? hotResult.value.date : undefined) ??
-      this.today();
+    const aiNews = aiResult.value.items;
+    const hotNews = hotResult.value.items;
 
     return {
-      source: providerSource,
-      date,
+      source: aiResult.value.fromCache || hotResult.value.fromCache ? "cache" : providerSource,
+      date: requestDate,
+      aiNewsDate: aiResult.value.date,
+      aiNewsEmptyDate: aiResult.value.emptyDate,
+      hotNewsDate: hotResult.value.date,
+      hotNewsEmptyDate: hotResult.value.emptyDate,
       aiNews,
       hotNews,
     };
   }
 
-  private async fetchAiNews(date?: string) {
+  private async resolveNewsKind(
+    kind: DailyNewsSnapshotKind,
+    requestDate: string,
+    refresh: boolean,
+    fetcher: () => Promise<DailyNewsResult>,
+  ): Promise<DailyNewsResult> {
+    if (!refresh) {
+      const cachedDaily = await this.getDailySnapshot(kind, requestDate);
+      if (cachedDaily) return this.resultFromSnapshot(cachedDaily);
+    }
+
+    try {
+      const current = await fetcher();
+      if (current.items.length) {
+        await this.writeNonEmptySnapshot(kind, requestDate, current);
+        return current;
+      }
+
+      const latestSnapshot = await this.getLatestSnapshot(kind);
+      const fallback = latestSnapshot
+        ? { ...this.resultFromSnapshot(latestSnapshot), emptyDate: current.date, fromCache: true }
+        : { date: current.date, emptyDate: current.date, items: [] };
+      await this.setDailySnapshot(
+        kind,
+        this.createSnapshot(requestDate, fallback.date, fallback.items, fallback.emptyDate),
+      );
+      return fallback;
+    } catch (error) {
+      const fallbackSnapshot = (await this.getDailySnapshot(kind, requestDate)) ?? (await this.getLatestSnapshot(kind));
+      if (fallbackSnapshot) return this.resultFromSnapshot(fallbackSnapshot);
+      throw error;
+    }
+  }
+
+  private async fetchAiNews(date?: string): Promise<DailyNewsResult> {
     const url = this.createProviderUrl("/v2/ai-news", date);
     const payload = await this.fetchProviderJson(url);
     const parsed = this.assertRecord(payload) as AiNewsPayload;
@@ -99,7 +149,7 @@ export class NewsService {
 
     const data = this.assertRecord(parsed.data);
     const newsDate = typeof data.date === "string" && data.date.trim() ? data.date.trim() : date ?? this.today();
-    const news = Array.isArray(data.news) ? data.news : [];
+    const news = this.assertNewsArray(data.news);
 
     return {
       date: newsDate,
@@ -107,7 +157,7 @@ export class NewsService {
     };
   }
 
-  private async fetchHotNews(date?: string) {
+  private async fetchHotNews(date?: string): Promise<DailyNewsResult> {
     const url = this.createProviderUrl("/v2/60s", date);
     const payload = await this.fetchProviderJson(url);
     const parsed = this.assertRecord(payload) as HotNewsPayload;
@@ -115,7 +165,7 @@ export class NewsService {
 
     const data = this.assertRecord(parsed.data);
     const newsDate = typeof data.date === "string" && data.date.trim() ? data.date.trim() : date ?? this.today();
-    const news = Array.isArray(data.news) ? data.news : [];
+    const news = this.assertNewsArray(data.news);
     const link = typeof data.link === "string" && data.link.trim() ? data.link.trim() : undefined;
 
     return {
@@ -236,6 +286,13 @@ export class NewsService {
     return record;
   }
 
+  private assertNewsArray(value: unknown): unknown[] {
+    if (!Array.isArray(value)) {
+      throw new Error("Daily news provider returned invalid news field");
+    }
+    return value;
+  }
+
   private toRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
   }
@@ -264,13 +321,131 @@ export class NewsService {
   }
 
   private today() {
-    return new Date().toISOString().slice(0, 10);
+    const parts = new Intl.DateTimeFormat("zh-CN", {
+      day: "2-digit",
+      month: "2-digit",
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
+  private cacheLiveResponse(response: CreatorDailyNewsResponse) {
+    this.cachedResponses.set(response.date, this.cloneResponse(response));
+  }
+
+  private getCachedResponse(date: string) {
+    const exactMatch = this.cachedResponses.get(date);
+    if (exactMatch) return exactMatch;
+
+    let latestResponse: CreatorDailyNewsResponse | null = null;
+    for (const response of this.cachedResponses.values()) {
+      if (!latestResponse || response.date > latestResponse.date) {
+        latestResponse = response;
+      }
+    }
+    return latestResponse;
+  }
+
+  private cloneResponse(
+    response: CreatorDailyNewsResponse,
+    source: DailyNewsProviderSource = response.source,
+  ): CreatorDailyNewsResponse {
+    return {
+      ...response,
+      source,
+      aiNews: response.aiNews.map((item) => ({ ...item })),
+      hotNews: response.hotNews.map((item) => ({ ...item })),
+    };
+  }
+
+  private async writeNonEmptySnapshot(kind: DailyNewsSnapshotKind, requestDate: string, result: DailyNewsResult) {
+    const snapshot = this.createSnapshot(requestDate, result.date, result.items);
+    await Promise.all([this.setDailySnapshot(kind, snapshot), this.setLatestSnapshot(kind, snapshot)]);
+  }
+
+  private async getDailySnapshot(kind: DailyNewsSnapshotKind, date: string) {
+    const redisSnapshot = await this.newsCache?.getDailySnapshot(kind, date);
+    if (redisSnapshot) {
+      this.rememberDailySnapshot(kind, redisSnapshot);
+      return this.cloneSnapshot(redisSnapshot);
+    }
+
+    const memorySnapshot = this.cachedDailySnapshots.get(this.getMemorySnapshotKey(kind, date));
+    return memorySnapshot ? this.cloneSnapshot(memorySnapshot) : null;
+  }
+
+  private async setDailySnapshot(kind: DailyNewsSnapshotKind, snapshot: DailyNewsSnapshot) {
+    this.rememberDailySnapshot(kind, snapshot);
+    await this.newsCache?.setDailySnapshot(kind, snapshot);
+  }
+
+  private async getLatestSnapshot(kind: DailyNewsSnapshotKind) {
+    const redisSnapshot = await this.newsCache?.getLatestSnapshot(kind);
+    if (redisSnapshot) {
+      this.rememberLatestSnapshot(kind, redisSnapshot);
+      return this.cloneSnapshot(redisSnapshot);
+    }
+
+    const memorySnapshot = this.cachedLatestSnapshots.get(kind);
+    return memorySnapshot ? this.cloneSnapshot(memorySnapshot) : null;
+  }
+
+  private async setLatestSnapshot(kind: DailyNewsSnapshotKind, snapshot: DailyNewsSnapshot) {
+    this.rememberLatestSnapshot(kind, snapshot);
+    await this.newsCache?.setLatestSnapshot(kind, snapshot);
+  }
+
+  private rememberDailySnapshot(kind: DailyNewsSnapshotKind, snapshot: DailyNewsSnapshot) {
+    this.cachedDailySnapshots.set(this.getMemorySnapshotKey(kind, snapshot.requestedDate), this.cloneSnapshot(snapshot));
+  }
+
+  private rememberLatestSnapshot(kind: DailyNewsSnapshotKind, snapshot: DailyNewsSnapshot) {
+    this.cachedLatestSnapshots.set(kind, this.cloneSnapshot(snapshot));
+  }
+
+  private resultFromSnapshot(snapshot: DailyNewsSnapshot): DailyNewsResult {
+    return {
+      date: snapshot.contentDate,
+      emptyDate: snapshot.emptyDate,
+      fromCache: true,
+      items: snapshot.items.map((item) => ({ ...item })),
+    };
+  }
+
+  private createSnapshot(
+    requestedDate: string,
+    contentDate: string,
+    items: DailyNewsItem[],
+    emptyDate?: string,
+  ): DailyNewsSnapshot {
+    return {
+      requestedDate,
+      contentDate,
+      ...(emptyDate ? { emptyDate } : {}),
+      items: items.map((item) => ({ ...item })),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  private cloneSnapshot(snapshot: DailyNewsSnapshot): DailyNewsSnapshot {
+    return {
+      ...snapshot,
+      items: snapshot.items.map((item) => ({ ...item })),
+    };
+  }
+
+  private getMemorySnapshotKey(kind: DailyNewsSnapshotKind, date: string) {
+    return `${kind}:${date}`;
   }
 
   private createMockResponse(date = this.today()): CreatorDailyNewsResponse {
     return {
       source: "mock",
       date,
+      aiNewsDate: date,
+      hotNewsDate: date,
       aiNews: [
         {
           id: `mock-ai-${date}-1`,

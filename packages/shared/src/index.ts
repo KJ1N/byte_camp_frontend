@@ -153,6 +153,10 @@ export interface DailyNewsItem {
 export interface CreatorDailyNewsResponse {
   source: DailyNewsProviderSource;
   date: string;
+  aiNewsDate?: string;
+  aiNewsEmptyDate?: string;
+  hotNewsDate?: string;
+  hotNewsEmptyDate?: string;
   aiNews: DailyNewsItem[];
   hotNews: DailyNewsItem[];
 }

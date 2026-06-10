@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "文舟，AI 创作者辅助生产与分发平台",
   applicationName: "文舟",
   icons: {
-    icon: "/icon.png",
+    icon: [{ url: "/icon.png?v=20260610-glow-logo-large", sizes: "any", type: "image/png" }],
   },
 };
 

@@ -49,11 +49,34 @@
 
 @layer components {
   .brand-wordmark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
     color: #ff4d4f;
     font-family:
       "Wenzhou Brand", "STZhongsong", "华文中宋", "Source Han Serif SC", "Noto Serif SC", "Songti SC",
       "SimSun", serif;
     font-weight: 800;
     letter-spacing: 0;
+  }
+
+  .brand-wordmark::before {
+    content: "";
+    display: inline-block;
+    width: 2rem;
+    height: 2rem;
+    flex: 0 0 auto;
+    border-radius: 0.375rem;
+    background: url("/icon.png") center / contain no-repeat;
+  }
+
+  .brand-wordmark.text-lg::before {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .brand-wordmark.text-2xl::before {
+    width: 2.25rem;
+    height: 2.25rem;
   }
 }

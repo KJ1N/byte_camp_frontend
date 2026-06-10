@@ -139,7 +139,7 @@ export default function CreatorHomePage() {
     setStatus("idle");
   }
 
-  async function loadDailyNews(authToken: string) {
+  async function loadDailyNews(authToken: string, options: { refresh?: boolean } = {}) {
     setNewsStatus("loading");
     setNewsSlow(false);
     setNewsError("");
@@ -147,7 +147,9 @@ export default function CreatorHomePage() {
     const slowTimer = window.setTimeout(() => setNewsSlow(true), 8000);
 
     try {
-      const response = await apiFetch("/news/creator-daily", { authToken });
+      const response = await apiFetch(options.refresh ? "/news/creator-daily?refresh=1" : "/news/creator-daily", {
+        authToken,
+      });
 
       if (response.status === 401) {
         clearAuthSession();
@@ -482,7 +484,7 @@ export default function CreatorHomePage() {
             loading={newsStatus === "loading"}
             slow={newsSlow}
             onOpen={openDailyNewsInWorkspace}
-            onRefresh={() => token && void loadDailyNews(token)}
+            onRefresh={() => token && void loadDailyNews(token, { refresh: true })}
           />
         </div>
       )}
@@ -517,6 +519,20 @@ function DailyNewsPanel({
 }) {
   const aiNews = dailyNews?.aiNews ?? [];
   const hotNews = dailyNews?.hotNews ?? [];
+  const aiNewsFallbackNotice =
+    dailyNews?.aiNewsEmptyDate && aiNews.length
+      ? `今日 AI 资讯暂无消息，已展示最近有消息的一天（${dailyNews.aiNewsDate ?? aiNews[0].date}）的资讯。`
+      : "";
+  const aiNewsEmptyText = dailyNews?.aiNewsEmptyDate
+    ? "今日 AI 资讯暂无消息。"
+    : "今日暂无重大 AI 资讯，建议稍晚再看。";
+  const hotNewsFallbackNotice =
+    dailyNews?.hotNewsEmptyDate && hotNews.length
+      ? `今日热点资讯暂无消息，已展示最近有消息的一天（${dailyNews.hotNewsDate ?? hotNews[0].date}）的资讯。`
+      : "";
+  const hotNewsEmptyText = dailyNews?.hotNewsEmptyDate
+    ? "今日热点资讯暂无消息。"
+    : "今日热点资讯暂未返回，可以稍后刷新。";
 
   return (
     <aside className="h-fit rounded-lg bg-white px-5 py-6 lg:sticky lg:top-20">
@@ -562,14 +578,16 @@ function DailyNewsPanel({
       {dailyNews ? (
         <div className="grid gap-6">
           <DailyNewsSection
-            emptyText="今日暂无重大 AI 资讯，建议稍晚再看。"
+            emptyText={aiNewsEmptyText}
             items={aiNews}
+            notice={aiNewsFallbackNotice}
             title="每日 AI 资讯"
             onOpen={onOpen}
           />
           <DailyNewsSection
-            emptyText="今日热点资讯暂未返回，可以稍后刷新。"
+            emptyText={hotNewsEmptyText}
             items={hotNews}
+            notice={hotNewsFallbackNotice}
             title="每日热点资讯"
             onOpen={onOpen}
           />
@@ -585,11 +603,13 @@ function DailyNewsPanel({
 function DailyNewsSection({
   emptyText,
   items,
+  notice,
   title,
   onOpen,
 }: {
   emptyText: string;
   items: DailyNewsItem[];
+  notice?: string;
   title: string;
   onOpen: (item: DailyNewsItem) => void;
 }) {
@@ -601,6 +621,11 @@ function DailyNewsSection({
       </div>
       {items.length ? (
         <div className="grid gap-2">
+          {notice ? (
+            <div className="rounded-md border border-[#ffe0ad] bg-[#fff9ec] px-3 py-2 text-sm leading-6 text-[#8a5b00]">
+              {notice}
+            </div>
+          ) : null}
           {items.slice(0, 6).map((item) => (
             <button
               className="group rounded-md border border-transparent px-2 py-4 text-left transition hover:border-[#ffd2d3] hover:bg-[#fff7f7] focus:outline-none focus:ring-2 focus:ring-[#ffb6b7]"

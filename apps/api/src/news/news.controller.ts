@@ -8,9 +8,10 @@ export class NewsController {
   constructor(private readonly newsService: NewsService) {}
 
   @Get("creator-daily")
-  getCreatorDailyNews(@Query("date") date?: string) {
+  getCreatorDailyNews(@Query("date") date?: string, @Query("refresh") refresh?: string) {
     return this.newsService.getCreatorDailyNews({
       date: this.normalizeDate(date),
+      refresh: this.normalizeRefresh(refresh),
     });
   }
 
@@ -23,5 +24,10 @@ export class NewsController {
     }
 
     return date;
+  }
+
+  private normalizeRefresh(value?: string) {
+    const refresh = value?.trim().toLowerCase();
+    return refresh === "1" || refresh === "true";
   }
 }
