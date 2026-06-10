@@ -218,8 +218,8 @@ export default function CreatorHomePage() {
     <main className="min-h-screen bg-[#f5f5f5] text-[#1f2329]">
       <header className="sticky top-0 z-30 border-b border-[#ededed] bg-white">
         <div className="mx-auto grid h-16 max-w-[1500px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-5 lg:grid-cols-[220px_minmax(0,1fr)_380px]">
-          <Link className="justify-self-start text-2xl font-black tracking-tight text-[#ff3b3f]" href="/">
-            创作者主页
+          <Link className="brand-wordmark justify-self-start text-2xl" href="/">
+            文舟
           </Link>
           <div className="justify-self-end lg:col-start-3">
             {user ? (

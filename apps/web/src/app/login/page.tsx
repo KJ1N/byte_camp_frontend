@@ -104,8 +104,8 @@ export default function LoginPage() {
   return (
     <main className="min-h-screen bg-[#f5f5f5] px-5 py-7 text-[#1f2329] md:px-[5vw]">
       <nav className="mx-auto mb-14 flex max-w-[1080px] flex-col items-start justify-between gap-4 md:flex-row md:items-center">
-        <Link href="/" className="font-extrabold">
-          AI Creator Hub
+        <Link href="/" className="brand-wordmark text-xl">
+          文舟
         </Link>
         <Link href="/" className="font-bold text-[#ff4d4f]">
           返回首页

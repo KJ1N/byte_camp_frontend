@@ -564,7 +564,9 @@ export default function WorkspacePage() {
             </button>
             <div>
               <div className="text-lg font-semibold">发布文章</div>
-              <div className="text-xs text-[#8f959e]">AI Creator Hub 工作台</div>
+              <div className="text-xs text-[#8f959e]">
+                工作台
+              </div>
             </div>
           </div>
 

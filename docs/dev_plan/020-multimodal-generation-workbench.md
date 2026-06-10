@@ -71,7 +71,7 @@
 - `apps/web/src/app/multimodal-workspace/page.tsx`
   - 多模态生成工作台页面。
 - `apps/web/src/app/multimodal-workspace/layout.tsx`
-  - 页面标题：`多模态生成 - AI Creator Hub`。
+  - 页面标题：`多模态生成 - 文舟`。
 - `apps/web/src/lib/multimodal-generated-body.ts`
   - 将正文、图片结果、caption 转换为 ProseMirror JSON。
 - `apps/web/src/lib/multimodal-generated-body.test.ts`

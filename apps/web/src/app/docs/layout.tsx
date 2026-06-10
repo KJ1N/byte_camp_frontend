@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "项目文档 - AI Creator Hub",
+  title: "发文规范 - 文舟",
 };
 
 export default function DocsLayout({ children }: Readonly<{ children: React.ReactNode }>) {

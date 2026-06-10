@@ -173,18 +173,18 @@ GET   /drafts/:id/versions
 
 | 路由 | 网页标题 |
 | --- | --- |
-| `/` | 内容首页 - AI Creator Hub |
-| `/workspace` | 创作工作台 - AI Creator Hub |
-| `/drafts` | 草稿箱 - AI Creator Hub |
-| `/drafts/:id` | 草稿编辑 - AI Creator Hub |
-| `/login` | 登录 - AI Creator Hub |
-| `/docs` | 项目文档 - AI Creator Hub |
+| `/` | 内容首页 - 文舟 |
+| `/workspace` | 创作工作台 - 文舟 |
+| `/drafts` | 草稿箱 - 文舟 |
+| `/drafts/:id` | 草稿编辑 - 文舟 |
+| `/login` | 登录 - 文舟 |
+| `/docs` | 发文规范 - 文舟 |
 
 ### 创作工作台
 
 工作台从首页迁移到 `/workspace`，并采用用户提供的今日头条发布页参考图作为视觉模板：
 
-- 未登录：展示紧凑登录引导和文档入口。
+- 未登录：展示紧凑登录引导和发文规范入口。
 - 已登录：展示创作表单、AI 生成结果、保存草稿按钮、最近草稿入口。
 - 使用 Tailwind CSS utility class 搭建页面主体样式，减少新增全局 CSS。
 - 顶部为白色发布栏，左侧包含返回/发布文章入口，右侧包含规范、消息和用户入口。

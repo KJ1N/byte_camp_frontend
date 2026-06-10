@@ -1,6 +1,16 @@
 @import "tailwindcss";
 
 @layer base {
+  @font-face {
+    font-family: "Wenzhou Brand";
+    src:
+      local("STZhongsong"),
+      local("华文中宋"),
+      local("Source Han Serif SC"),
+      local("Noto Serif CJK SC");
+    font-display: swap;
+  }
+
   html {
     background: #f7f8fb;
     color: #18202f;
@@ -34,5 +44,16 @@
   input:disabled,
   [disabled] {
     @apply cursor-not-allowed pointer-events-none;
+  }
+}
+
+@layer components {
+  .brand-wordmark {
+    color: #ff4d4f;
+    font-family:
+      "Wenzhou Brand", "STZhongsong", "华文中宋", "Source Han Serif SC", "Noto Serif SC", "Songti SC",
+      "SimSun", serif;
+    font-weight: 800;
+    letter-spacing: 0;
   }
 }

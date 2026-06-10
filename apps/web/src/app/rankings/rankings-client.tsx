@@ -158,8 +158,8 @@ export default function RankingsClient({
     <main className="min-h-screen bg-[#f5f5f5] text-[#1f2329]">
       <header className="sticky top-0 z-20 border-b border-[#ededed] bg-white">
         <div className="mx-auto flex h-16 max-w-[1180px] items-center justify-between px-5">
-          <Link className="text-lg font-semibold text-[#ff4d4f]" href="/">
-            AI Creator Hub
+          <Link className="brand-wordmark text-xl" href="/">
+            文舟
           </Link>
           <div className="flex items-center gap-4 text-sm">
             {user ? (

@@ -120,12 +120,12 @@ apps/web/src/app
 
 | 路由 | 网页标题 |
 | --- | --- |
-| `/` | 内容首页 - AI Creator Hub |
-| `/workspace` | 创作工作台 - AI Creator Hub |
-| `/drafts` | 草稿箱 - AI Creator Hub |
-| `/drafts/:id` | 草稿编辑 - AI Creator Hub |
-| `/login` | 登录 - AI Creator Hub |
-| `/docs` | 项目文档 - AI Creator Hub |
+| `/` | 内容首页 - 文舟 |
+| `/workspace` | 创作工作台 - 文舟 |
+| `/drafts` | 草稿箱 - 文舟 |
+| `/drafts/:id` | 草稿编辑 - 文舟 |
+| `/login` | 登录 - 文舟 |
+| `/docs` | 发文规范 - 文舟 |
 
 ### 5.3 样式策略
 

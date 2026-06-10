@@ -118,8 +118,8 @@ export default function ContentHomePage() {
     <main className="min-h-screen bg-[#f5f5f5] text-[#1f2329]">
       <header className="sticky top-0 z-20 border-b border-[#ededed] bg-white">
         <div className="mx-auto flex h-16 max-w-[1280px] items-center justify-between px-5">
-          <Link className="text-lg font-semibold" href="/">
-            AI Creator Hub
+          <Link className="brand-wordmark text-xl" href="/">
+            文舟
           </Link>
 
           <nav className="hidden items-center gap-7 text-sm text-[#4e5661] md:flex">
@@ -128,7 +128,7 @@ export default function ContentHomePage() {
             </a>
             <Link href="/rankings?tab=hot">热点榜</Link>
             <Link href="/rankings?tab=top">爆文榜</Link>
-            <Link href="/docs">文档</Link>
+            <Link href="/docs">发文规范</Link>
           </nav>
 
           <div className="flex items-center gap-4 text-sm">
@@ -228,9 +228,6 @@ export default function ContentHomePage() {
         </div>
 
         <aside id="rankings" className="space-y-5">
-          <RankingPanel href="/rankings?tab=hot" items={hotRankings} kind="hot" title="热点榜" />
-          <RankingPanel href="/rankings?tab=top" items={topRankings} kind="top" title="爆文榜" />
-
           <div className="bg-white px-5 py-5">
             <h2 className="text-lg font-semibold">创作者入口</h2>
             <p className="mt-3 text-sm leading-7 text-[#6b7280]">
@@ -240,6 +237,10 @@ export default function ContentHomePage() {
               进入工作台
             </Link>
           </div>
+          <RankingPanel href="/rankings?tab=hot" items={hotRankings} kind="hot" title="热点榜" />
+          <RankingPanel href="/rankings?tab=top" items={topRankings} kind="top" title="爆文榜" />
+
+          
         </aside>
       </section>
     </main>
