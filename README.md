@@ -27,7 +27,7 @@
 | 一键合规改写                    | 完整实现                     | [二、系统架构与关键实现](#二系统架构与关键实现)               |
 | 多模态图文生成                  | 完整实现                     | [一、项目能力](#一项目能力)                                   |
 | 图片/资料素材上传、抽取与审核   | 完整实现                     | [一、项目能力](#一项目能力)                                   |
-| 每日 AI 资讯/热点资讯选题预填   | 完整实现，支持 Redis 快照    | [一、项目能力](#一项目能力)                                   |
+| 每日 AI 资讯/热点资讯开放 API   | 完整实现，支持 Redis 快照    | [一、项目能力](#一项目能力)                                   |
 | 榜单 LCP 与无限滚动性能 E2E     | 完整实现                     | [三、快速开始](#三快速开始)                                   |
 
 详细产品、架构、审核与评估文档见 [docs](./docs)，协作规则见 [AGENTS.md](./AGENTS.md)。
@@ -66,20 +66,20 @@ Seed 演示账号：
 
 文舟围绕图文内容的**生产、审核、发布、分发、反馈**构建完整闭环。
 
-| 能力             | 说明                                                                                                                                            |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| 账号与创作者入口 | 支持注册、登录、JWT 鉴权、退出登录；首页用户菜单可进入工作台、草稿箱和创作者主页；Creator 页面展示真实作品、统计和“我的内容”。                  |
-| AI 内容创作      | 支持主题生成文章、Prompt 模板选择、标题优化、正文润色/扩写/缩写/风格转换；文章生成、标题优化、正文改写和合规改写均支持 SSE 流式体验。           |
-| 富文本草稿       | 基于 TipTap / ProseMirror JSON 存储内容；支持标题、段落、加粗、列表、引用、图片、资料附件、自动保存、离线暂存、刷新恢复、版本历史和版本回滚。   |
-| Prompt 管理      | 平台 Prompt 只读，用户可复制为私人模板；工作台支持新增、修改、删除自定义 Prompt，并在生成链路中使用。                                           |
-| 审核与评分       | 发布前由后端强制执行安全审核和质量评分；支持 PASS / WARN / BLOCK、风险片段、风险类别、改写建议、质量五维分和审核记录持久化。                    |
-| 合规改写         | WARN / BLOCK 内容可触发 AI 一键合规改写，生成替代表达后回写草稿，再重新审核发布。                                                               |
-| 发布与二次编辑   | 审核通过后生成文章快照和详情页；已发布内容可撤回，也可二次编辑并重新进入审核发布流程。                                                          |
-| 信息流与榜单     | 首页推荐流、热点榜、爆文榜均由后端提供；Redis Sorted Set 缓存榜单，Redis 不可用时回退 PostgreSQL；阅读、点赞、收藏会影响排序和创作者数据反馈。  |
-| 素材与多媒体     | 支持图片、txt、md、docx 资料上传；素材按文件夹管理；资料文本抽取后参与审核；图片支持视觉审核和发布前同源审核。                                  |
-| 多模态工作台     | 独立 `/multimodal-workspace` 支持生成正文、图片计划、图片状态和 1 到 4 张配图；生成结果可保存为富文本草稿并继续审核发布。                       |
-| 每日资讯选题     | Creator 页面展示每日 AI 资讯和热点资讯；后端统一接入外部资讯源，支持 Redis 当天快照、最近非空快照、手动刷新和 mock 模式；资讯可一键预填工作台。 |
-| 自动化验证       | 已覆盖后端 Service/Controller 测试、前端 helper 测试、Playwright 主链路 smoke E2E、榜单 LCP 与无限滚动性能 E2E、GitHub Actions CI。             |
+| 能力             | 说明                                                                                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 账号与创作者入口 | 支持注册、登录、JWT 鉴权、退出登录；首页用户菜单可进入工作台、草稿箱和创作者主页；Creator 页面展示真实作品、统计和“我的内容”。                                       |
+| AI 内容创作      | 支持主题生成文章、Prompt 模板选择、标题优化、正文润色/扩写/缩写/风格转换；文章生成、标题优化、正文改写和合规改写均支持 SSE 流式体验。                                |
+| 富文本草稿       | 基于 TipTap / ProseMirror JSON 存储内容；支持标题、段落、加粗、列表、引用、图片、资料附件、自动保存、离线暂存、刷新恢复、版本历史和版本回滚。                        |
+| Prompt 管理      | 平台 Prompt 只读，用户可复制为私人模板；工作台支持新增、修改、删除自定义 Prompt，并在生成链路中使用。                                                                |
+| 审核与评分       | 发布前由后端强制执行安全审核和质量评分；支持 PASS / WARN / BLOCK、风险片段、风险类别、改写建议、质量五维分和审核记录持久化。                                         |
+| 合规改写         | WARN / BLOCK 内容可触发 AI 一键合规改写，生成替代表达后回写草稿，再重新审核发布。                                                                                    |
+| 发布与二次编辑   | 审核通过后生成文章快照和详情页；已发布内容可撤回，也可二次编辑并重新进入审核发布流程。                                                                               |
+| 信息流与榜单     | 首页推荐流、热点榜、爆文榜均由后端提供；Redis Sorted Set 缓存榜单，Redis 不可用时回退 PostgreSQL；阅读、点赞、收藏会影响排序和创作者数据反馈。                       |
+| 素材与多媒体     | 支持图片、txt、md、docx 资料上传；素材按文件夹管理；资料文本抽取后参与审核；图片支持视觉审核和发布前同源审核。                                                       |
+| 多模态工作台     | 独立 `/multimodal-workspace` 支持生成正文、图片计划、图片状态和 1 到 4 张配图；生成结果可保存为富文本草稿并继续审核发布。                                            |
+| 每日资讯选题     | Creator 页面展示每日 AI 资讯和热点资讯；后端接入 `60s.viki.moe` 开放 API 获取 AI 资讯与热点数据，支持 Redis 当天快照、最近非空快照和手动刷新；资讯可一键预填工作台。 |
+| 自动化验证       | 已覆盖后端 Service/Controller 测试、前端 helper 测试、Playwright 主链路 smoke E2E、榜单 LCP 与无限滚动性能 E2E、GitHub Actions CI。                                  |
 
 核心演示路径：
 
@@ -138,22 +138,22 @@ feed          推荐信息流
 ranking       热点榜、爆文榜、Redis 缓存与 PostgreSQL 回退
 analytics     阅读、点赞、收藏事件
 assets        素材上传、资料抽取、云存储契约、图片视觉审核
-news          每日资讯接入、Redis 快照、mock 降级
+news          开放 API 每日资讯接入、Redis 快照、显式 mock 模式
 common        SSE 工具、健康检查、环境路径
 ```
 
 ### 关键设计与核心实现
 
-| 技术支柱       | 核心实现                                                                                                     | 深入阅读                                                                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| AI 集中编排    | AI Gateway 统一处理模型配置、OpenAI-compatible 调用、Prompt 渲染、结构化解析、SSE 流、超时重试和 mock 降级。 | [技术架构](./docs/architecture.md) · [模型接入方案](./docs/dev_plan/007-model-provider-integration.md)                                       |
-| 草稿编辑闭环   | 工作台生成后保存为草稿；编辑页支持富文本、自动保存、离线暂存、刷新恢复、版本历史、版本回滚和冲突提示。       | [草稿方案](./docs/dev_plan/002-creation-workbench-drafts.md) · [离线同步方案](./docs/dev_plan/015-draft-offline-sync-and-redis-ranking.md)   |
-| 发布审核流水线 | 发布由后端强制触发审核和评分；正文与图片节点可拆分审核后聚合裁决；BLOCK 不发布，WARN 引导修改后重审。        | [审核发布方案](./docs/dev_plan/004-audit-scoring-publish.md) · [审核规则](./docs/audit-rules.md)                                             |
-| 合规改写       | 对有风险的审核结果生成替代表达，返回富文本正文和建议，用户确认后写回草稿。                                   | [合规改写方案](./docs/dev_plan/011-compliance-rewrite-publish-review.md)                                                                     |
-| 分发与榜单     | 基于质量分、热度、时间新鲜度和互动反馈计算 rank score；Redis 缓存榜单，失败时回退 PostgreSQL。               | [分发方案](./docs/dev_plan/006-feed-ranking-analytics.md) · [榜单性能方案](./docs/dev_plan/019-ranking-infinite-scroll-lcp.md)               |
-| 素材与视觉审核 | 图片和资料上传后进行基础校验、资料文本抽取、视觉审核、云存储 URL 契约；发布前对正文图片进行同源审核。        | [素材方案](./docs/dev_plan/016-assets-cloud-vision-audit.md) · [图片审核方案](./docs/dev_plan/023-publish-image-download-base64-audit.md)    |
-| 多模态生成     | 流式返回正文、图片计划、图片生成状态和完成图片；结果组合为 ProseMirror 富文本草稿。                          | [多模态方案](./docs/dev_plan/020-multimodal-generation-workbench.md)                                                                         |
-| 每日资讯选题   | 后端统一请求外部日更资讯，支持实时接口、Redis 当天快照、最近非空快照、mock 演示和工作台预填。                | [资讯预填方案](./docs/dev_plan/021-creator-daily-news-prefill.md) · [资讯缓存方案](./docs/dev_plan/022-creator-daily-news-redis-snapshot.md) |
+| 技术支柱       | 核心实现                                                                                                                     | 深入阅读                                                                                                                                     |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI 集中编排    | AI Gateway 统一处理模型配置、OpenAI-compatible 调用、Prompt 渲染、结构化解析、SSE 流、超时重试和 mock 降级。                 | [技术架构](./docs/architecture.md) · [模型接入方案](./docs/dev_plan/007-model-provider-integration.md)                                       |
+| 草稿编辑闭环   | 工作台生成后保存为草稿；编辑页支持富文本、自动保存、离线暂存、刷新恢复、版本历史、版本回滚和冲突提示。                       | [草稿方案](./docs/dev_plan/002-creation-workbench-drafts.md) · [离线同步方案](./docs/dev_plan/015-draft-offline-sync-and-redis-ranking.md)   |
+| 发布审核流水线 | 发布由后端强制触发审核和评分；正文与图片节点可拆分审核后聚合裁决；BLOCK 不发布，WARN 引导修改后重审。                        | [审核发布方案](./docs/dev_plan/004-audit-scoring-publish.md) · [审核规则](./docs/audit-rules.md)                                             |
+| 合规改写       | 对有风险的审核结果生成替代表达，返回富文本正文和建议，用户确认后写回草稿。                                                   | [合规改写方案](./docs/dev_plan/011-compliance-rewrite-publish-review.md)                                                                     |
+| 分发与榜单     | 基于质量分、热度、时间新鲜度和互动反馈计算 rank score；Redis 缓存榜单，失败时回退 PostgreSQL。                               | [分发方案](./docs/dev_plan/006-feed-ranking-analytics.md) · [榜单性能方案](./docs/dev_plan/019-ranking-infinite-scroll-lcp.md)               |
+| 素材与视觉审核 | 图片和资料上传后进行基础校验、资料文本抽取、视觉审核、云存储 URL 契约；发布前对正文图片进行同源审核。                        | [素材方案](./docs/dev_plan/016-assets-cloud-vision-audit.md) · [图片审核方案](./docs/dev_plan/023-publish-image-download-base64-audit.md)    |
+| 多模态生成     | 流式返回正文、图片计划、图片生成状态和完成图片；结果组合为 ProseMirror 富文本草稿。                                          | [多模态方案](./docs/dev_plan/020-multimodal-generation-workbench.md)                                                                         |
+| 每日资讯选题   | 后端接入 `60s.viki.moe` 开放 API 获取每日 AI 资讯与热点数据，支持 Redis 当天快照、最近非空快照、显式 mock 模式和工作台预填。 | [资讯预填方案](./docs/dev_plan/021-creator-daily-news-prefill.md) · [资讯缓存方案](./docs/dev_plan/022-creator-daily-news-redis-snapshot.md) |
 
 ---
 
@@ -177,29 +177,31 @@ cp .env.example .env
 
 重点检查：
 
-| 变量                                                       | 用途                         | 说明                                         |
-| ---------------------------------------------------------- | ---------------------------- | -------------------------------------------- |
-| `NEXT_PUBLIC_API_BASE_URL`                                 | Web 访问 API 的基础地址      | `pnpm dev` 会自动注入可用 API 地址           |
-| `PORT`                                                     | API 服务端口                 | 默认 `3201`                                  |
-| `JWT_SECRET` / `JWT_EXPIRES_IN`                            | 登录态签名与过期时间         | 生产环境必须使用强 secret                    |
-| `DATABASE_URL`                                             | PostgreSQL 连接              | Prisma migration、seed、API 运行依赖         |
-| `E2E_DATABASE_URL`                                         | E2E 专用数据库               | 必须和 `DATABASE_URL` 不同                   |
-| `REDIS_URL`                                                | Redis 连接                   | 榜单缓存和每日资讯快照依赖；不可用时有降级   |
-| `AI_PROVIDER_MODE`                                         | 文本模型模式                 | `auto` / `mock` / `live`                     |
-| `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`                  | OpenAI-compatible 文本模型   | live 模式必须配置                            |
-| `AI_IMAGE_MODEL` / `AI_IMAGE_TIMEOUT_MS` / `AI_IMAGE_SIZE` | 图片生成配置                 | 多模态工作台可选                             |
-| `ASSET_STORAGE_MODE`                                       | 素材存储模式                 | `mock` 或 `s3`                               |
-| `ASSET_AUDIT_MODE` / `ASSET_VISION_MODEL`                  | 图片与资料审核               | `auto` 会在凭据齐备时使用真实模型，否则 mock |
-| `PUBLIC_API_BASE_URL`                                      | 稳定图片 URL 的 API 公网地址 | 生产部署建议配置                             |
-| `NEWS_PROVIDER_MODE` / `NEWS_FETCH_TIMEOUT_MS`             | 每日资讯模式与超时           | `mock` 适合课堂演示                          |
+| 变量                                                       | 用途                         | 说明                                           |
+| ---------------------------------------------------------- | ---------------------------- | ---------------------------------------------- |
+| `NEXT_PUBLIC_API_BASE_URL`                                 | Web 访问 API 的基础地址      | `pnpm dev` 会自动注入可用 API 地址             |
+| `PORT`                                                     | API 服务端口                 | 默认 `3201`                                    |
+| `JWT_SECRET` / `JWT_EXPIRES_IN`                            | 登录态签名与过期时间         | 生产环境必须使用强 secret                      |
+| `DATABASE_URL`                                             | PostgreSQL 连接              | Prisma migration、seed、API 运行依赖           |
+| `E2E_DATABASE_URL`                                         | E2E 专用数据库               | 必须和 `DATABASE_URL` 不同                     |
+| `REDIS_URL`                                                | Redis 连接                   | 榜单缓存和每日资讯快照依赖；不可用时有降级     |
+| `AI_PROVIDER_MODE`                                         | 文本模型模式                 | `auto` / `mock` / `live`                       |
+| `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`                  | OpenAI-compatible 文本模型   | live 模式必须配置                              |
+| `AI_IMAGE_MODEL` / `AI_IMAGE_TIMEOUT_MS` / `AI_IMAGE_SIZE` | 图片生成配置                 | 多模态工作台可选                               |
+| `ASSET_STORAGE_MODE`                                       | 素材存储模式                 | `mock` 或 `s3`                                 |
+| `ASSET_AUDIT_MODE` / `ASSET_VISION_MODEL`                  | 图片与资料审核               | `auto` 会在凭据齐备时使用真实模型，否则 mock   |
+| `PUBLIC_API_BASE_URL`                                      | 稳定图片 URL 的 API 公网地址 | 生产部署建议配置                               |
+| `NEWS_PROVIDER_MODE` / `NEWS_FETCH_TIMEOUT_MS`             | 每日资讯开放 API 模式与超时  | `auto` 默认接入开放 API，`mock` 仅用于离线兜底 |
 
-离线演示推荐：
+本地演示推荐：
 
 ```env
 AI_PROVIDER_MODE=mock
 ASSET_AUDIT_MODE=mock
-NEWS_PROVIDER_MODE=mock
+NEWS_PROVIDER_MODE=auto
 ```
+
+`NEWS_PROVIDER_MODE=auto` 会优先请求开放 API；只有需要完全离线演示时，才显式改为 `NEWS_PROVIDER_MODE=mock`。
 
 真实模型调用示例：
 
@@ -394,7 +396,7 @@ AI_MODEL=your-model-name
 
 ### Redis 不可用会不会影响演示
 
-不会中断核心链路。热点榜和爆文榜会回退到 PostgreSQL 查询与内存排序；每日资讯会按实时接口、最近缓存、mock 或空状态降级。
+不会中断核心链路。热点榜和爆文榜会回退到 PostgreSQL 查询与内存排序；每日资讯默认走开放 API，并可回退到 Redis/内存最近缓存或空状态。`mock` 只在显式配置 `NEWS_PROVIDER_MODE=mock` 时启用。
 
 ### E2E 为什么必须配置独立数据库
 
@@ -502,7 +504,7 @@ pnpm test:e2e:rankings-performance
 - API 设置 `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET`、AI provider 和素材存储变量。
 - 首次部署后执行 Prisma migration；是否执行 seed 取决于是否需要演示数据。
 - API 部署后先检查 `/health`，再验证登录、创作、审核、发布和榜单链路。
-- Redis 不可用时，榜单会回退 PostgreSQL 排序；每日资讯会按实时接口、缓存、演示数据或空状态降级。
+- Redis 不可用时，榜单会回退 PostgreSQL 排序；每日资讯默认请求开放 API，并按缓存或空状态降级。演示数据只在显式 `NEWS_PROVIDER_MODE=mock` 时使用。
 - 真实生产环境应使用强 `JWT_SECRET`，不得提交真实 AI 密钥、数据库密码或对象存储密钥。
 
 ### API 速览
