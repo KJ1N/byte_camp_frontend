@@ -114,7 +114,7 @@ Query 参数：
   - `news.service.ts`
   - `news.service.spec.ts`
 
-后端负责调用外部资讯接口，前端不直接访问 `60s.viki.moe`，保持“薄前端、厚后端”的架构边界。
+服务端负责调用外部资讯接口，前端不直接访问 `60s.viki.moe`，从而保持前端交互简洁，并由服务端统一处理超时、缓存和数据格式差异。
 
 ### 共享包 `packages/shared`
 

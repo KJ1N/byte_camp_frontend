@@ -2,7 +2,7 @@
 
 ## 1. 架构目标
 
-本项目采用“薄前端、厚后端、AI 能力集中编排”的架构。前端专注交互、编辑器、状态展示；后端负责 AI 调用、Prompt 编排、审核、评分、发布、分发排序和数据持久化。
+本项目采用“前端体验主导，服务端保障 AI、安全与数据能力”的架构。前端重点承载创作工作台、富文本编辑器、榜单消费场景、状态反馈和流式交互；服务端负责 AI 调用、Prompt 编排、审核、评分、发布、分发排序和数据持久化，保证密钥安全与业务规则可追溯。
 
 核心原则：
 
@@ -14,19 +14,19 @@
 
 ## 2. 应用技术栈
 
-| 层级 | 技术选型 | 说明 |
-| --- | --- | --- |
-| Monorepo | pnpm workspace | 管理 `apps/*` 与 `packages/*`，统一脚本、依赖和类型检查 |
-| 前端框架 | Next.js + React + TypeScript | 承载页面路由、创作工作台、榜单、详情页和登录态管理 |
-| 前端样式 | Tailwind CSS 主导 + 少量全局 CSS | 页面与组件样式优先使用 Tailwind utility class，全局 CSS 仅承载 reset、设计变量、基础排版和第三方组件兜底 |
-| 富文本编辑 | TipTap / ProseMirror JSON | 编辑器内容以前后端可共享的结构化 JSON 存储 |
-| 后端框架 | NestJS + TypeScript | 承载鉴权、草稿、AI Gateway、审核、评分、发布和分发业务 |
-| 数据库 | PostgreSQL + Prisma | 存储用户、草稿、版本、审核记录、质量分、文章和互动数据 |
-| 缓存/榜单 | Redis Sorted Set | 承载热点榜、爆文榜、Prompt 缓存、限流和编辑锁等能力 |
-| AI 接入 | OpenAI SDK 兼容模式 | 统一适配火山方舟、豆包或其他 OpenAI-compatible 模型供应商 |
-| 鉴权 | JWT + bcrypt | 密码哈希存储，登录后签发 access token |
-| 测试 | TypeScript typecheck、Jest/Vitest、Supertest、Playwright | 覆盖类型检查、服务单测、接口测试和端到端流程 |
-| 部署 | Vercel + Railway/Render/ECS + 托管 PostgreSQL/Redis | MVP 优先选择低运维成本的托管平台 |
+| 层级       | 技术选型                                                 | 说明                                                                                                     |
+| ---------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Monorepo   | pnpm workspace                                           | 管理 `apps/*` 与 `packages/*`，统一脚本、依赖和类型检查                                                  |
+| 前端框架   | Next.js + React + TypeScript                             | 承载页面路由、创作工作台、榜单、详情页和登录态管理                                                       |
+| 前端样式   | Tailwind CSS 主导 + 少量全局 CSS                         | 页面与组件样式优先使用 Tailwind utility class，全局 CSS 仅承载 reset、设计变量、基础排版和第三方组件兜底 |
+| 富文本编辑 | TipTap / ProseMirror JSON                                | 编辑器内容以前后端可共享的结构化 JSON 存储                                                               |
+| 后端框架   | NestJS + TypeScript                                      | 承载鉴权、草稿、AI Gateway、审核、评分、发布和分发业务                                                   |
+| 数据库     | PostgreSQL + Prisma                                      | 存储用户、草稿、版本、审核记录、质量分、文章和互动数据                                                   |
+| 缓存/榜单  | Redis Sorted Set                                         | 承载热点榜、爆文榜、Prompt 缓存、限流和编辑锁等能力                                                      |
+| AI 接入    | OpenAI SDK 兼容模式                                      | 统一适配火山方舟、豆包或其他 OpenAI-compatible 模型供应商                                                |
+| 鉴权       | JWT + bcrypt                                             | 密码哈希存储，登录后签发 access token                                                                    |
+| 测试       | TypeScript typecheck、Jest/Vitest、Supertest、Playwright | 覆盖类型检查、服务单测、接口测试和端到端流程                                                             |
+| 部署       | Vercel + Railway/Render/ECS + 托管 PostgreSQL/Redis      | MVP 优先选择低运维成本的托管平台                                                                         |
 
 ## 3. 总体架构
 
@@ -119,14 +119,14 @@ apps/web/src/app
 
 不同路由需要呈现不同网页标题，便于演示和浏览器标签识别：
 
-| 路由 | 网页标题 |
-| --- | --- |
-| `/` | 内容首页 - 文舟 |
-| `/workspace` | 创作工作台 - 文舟 |
-| `/drafts` | 草稿箱 - 文舟 |
-| `/drafts/:id` | 草稿编辑 - 文舟 |
-| `/login` | 登录 - 文舟 |
-| `/docs` | 发文规范 - 文舟 |
+| 路由          | 网页标题          |
+| ------------- | ----------------- |
+| `/`           | 内容首页 - 文舟   |
+| `/workspace`  | 创作工作台 - 文舟 |
+| `/drafts`     | 草稿箱 - 文舟     |
+| `/drafts/:id` | 草稿编辑 - 文舟   |
+| `/login`      | 登录 - 文舟       |
+| `/docs`       | 发文规范 - 文舟   |
 
 ### 5.3 样式策略
 
@@ -181,12 +181,12 @@ AI Gateway 统一处理：
 
 审核不是单个接口，而是贯穿内容生命周期：
 
-| 阶段 | 触发点 | 动作 |
-| --- | --- | --- |
-| 输入阶段 | 用户提交主题/素材 | 基础风险校验 |
-| 生成阶段 | AI 输出后 | 审核生成内容片段 |
-| 发布前 | 点击发布 | 强制安全审核和质量评分 |
-| 发布后 | 举报/巡检 | 下线、回滚、复审 |
+| 阶段     | 触发点            | 动作                   |
+| -------- | ----------------- | ---------------------- |
+| 输入阶段 | 用户提交主题/素材 | 基础风险校验           |
+| 生成阶段 | AI 输出后         | 审核生成内容片段       |
+| 发布前   | 点击发布          | 强制安全审核和质量评分 |
+| 发布后   | 举报/巡检         | 下线、回滚、复审       |
 
 风险等级：
 
@@ -215,29 +215,29 @@ AI Gateway 统一处理：
 
 核心表：
 
-| 表 | 说明 |
-| --- | --- |
-| users | 用户 |
-| drafts | 草稿当前态 |
-| draft_versions | 草稿版本快照 |
-| prompts | 平台和用户 Prompt |
-| assets | 用户素材 |
-| audit_records | 审核记录 |
-| quality_scores | 内容质量分 |
-| articles | 已发布文章 |
-| article_revisions | 发布后编辑版本 |
+| 表                | 说明                   |
+| ----------------- | ---------------------- |
+| users             | 用户                   |
+| drafts            | 草稿当前态             |
+| draft_versions    | 草稿版本快照           |
+| prompts           | 平台和用户 Prompt      |
+| assets            | 用户素材               |
+| audit_records     | 审核记录               |
+| quality_scores    | 内容质量分             |
+| articles          | 已发布文章             |
+| article_revisions | 发布后编辑版本         |
 | engagement_events | 阅读、点赞、收藏等事件 |
-| ranking_snapshots | 榜单快照 |
+| ranking_snapshots | 榜单快照               |
 
 ## 8. Redis 设计
 
-| Key | 用途 |
-| --- | --- |
-| `rank:hot` | 热点榜 sorted set |
-| `rank:top` | 爆文榜 sorted set |
-| `draft:lock:{id}` | 编辑锁/版本冲突辅助 |
-| `audit:rate:{userId}` | 审核接口限流 |
-| `cache:prompt:platform` | 平台 Prompt 缓存 |
+| Key                     | 用途                |
+| ----------------------- | ------------------- |
+| `rank:hot`              | 热点榜 sorted set   |
+| `rank:top`              | 爆文榜 sorted set   |
+| `draft:lock:{id}`       | 编辑锁/版本冲突辅助 |
+| `audit:rate:{userId}`   | 审核接口限流        |
+| `cache:prompt:platform` | 平台 Prompt 缓存    |
 
 ## 9. API 设计
 
@@ -348,12 +348,12 @@ MVP 推荐：
 
 ## 12. 测试策略
 
-| 类型 | 工具 | 覆盖 |
-| --- | --- | --- |
-| 单元测试 | Vitest/Jest | 评分、排序、Prompt 渲染 |
-| 接口测试 | Jest + Supertest | 登录、草稿、发布、审核 |
-| E2E | Playwright | 创作到发布完整链路 |
-| 性能 | Lighthouse | 首页、榜单、详情页 LCP |
+| 类型     | 工具             | 覆盖                    |
+| -------- | ---------------- | ----------------------- |
+| 单元测试 | Vitest/Jest      | 评分、排序、Prompt 渲染 |
+| 接口测试 | Jest + Supertest | 登录、草稿、发布、审核  |
+| E2E      | Playwright       | 创作到发布完整链路      |
+| 性能     | Lighthouse       | 首页、榜单、详情页 LCP  |
 
 ### 12.1 E2E 测试
 

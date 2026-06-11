@@ -34,7 +34,7 @@
 - 直接满足“发布前的审核用模型能力审核”。
 - 复用已有 `AI_PROVIDER_MODE`、OpenAI-compatible provider、SSE、Prompt 表和工作台样式，不引入新模型客户端。
 - 不修改 Prisma schema，降低迁移和回滚成本。
-- 保持厚后端边界：Prompt 渲染、模型调用、审核裁决、输出解析都在 `apps/api`。
+- 保持安全边界：Prompt 渲染、模型调用、审核裁决、输出解析都在 `apps/api`，前端专注配置入口和结果反馈。
 
 代价：
 
@@ -450,20 +450,20 @@ mock 审核：
 
 ## 8. 风险、边界情况和回滚方案
 
-| 风险 | 处理 |
-| --- | --- |
-| 自定义 Prompt 破坏输出 JSON | 前端不开放 systemPrompt，后端固定追加 JSON schema，返回后强解析 |
-| 用户编辑平台 Prompt | 平台 Prompt 只读，修改时先复制为私有 Prompt |
-| 用户读取或修改他人私有 Prompt | 所有 Prompt 查询加入 `authorId` 校验 |
-| 模型审核输出非法 | 抛出 bad output，前端提示重试，发布接口不创建文章 |
-| live 模型不可用 | live 模式返回明确错误；auto 本地可 mock；不静默放行发布 |
-| mock 与 live 判断不一致 | mock 仅用于测试和本地演示，生产配置使用 live |
-| Prompt 内容过长导致费用或延迟升高 | 限制 `userTemplate` 长度，例如 4000 字符以内 |
-| 用户删除必须变量 | 后端仍追加 topic/audience/style 输入上下文；编辑器提示建议保留 `{{topic}}` |
-| 发布预检查 PASS 后内容被改 | `POST /publish/:draftId` 内部重新审核 |
-| AI 审核耗时超过 Prisma 事务超时 | 模型审核和评分在打开事务前完成，事务只包住数据库写入，并用发布回归测试防止再次把审核移回事务内 |
-| AI 审核期间草稿被再次保存 | 事务内按审核前的 `draft.version` 做校验，版本变化则返回冲突错误，要求用户重新审核和发布 |
-| 工作台页面过大 | 新增 `PromptManagerPanel` 和 `prompt-management.ts` 分担 UI 与纯状态逻辑 |
+| 风险                              | 处理                                                                                           |
+| --------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 自定义 Prompt 破坏输出 JSON       | 前端不开放 systemPrompt，后端固定追加 JSON schema，返回后强解析                                |
+| 用户编辑平台 Prompt               | 平台 Prompt 只读，修改时先复制为私有 Prompt                                                    |
+| 用户读取或修改他人私有 Prompt     | 所有 Prompt 查询加入 `authorId` 校验                                                           |
+| 模型审核输出非法                  | 抛出 bad output，前端提示重试，发布接口不创建文章                                              |
+| live 模型不可用                   | live 模式返回明确错误；auto 本地可 mock；不静默放行发布                                        |
+| mock 与 live 判断不一致           | mock 仅用于测试和本地演示，生产配置使用 live                                                   |
+| Prompt 内容过长导致费用或延迟升高 | 限制 `userTemplate` 长度，例如 4000 字符以内                                                   |
+| 用户删除必须变量                  | 后端仍追加 topic/audience/style 输入上下文；编辑器提示建议保留 `{{topic}}`                     |
+| 发布预检查 PASS 后内容被改        | `POST /publish/:draftId` 内部重新审核                                                          |
+| AI 审核耗时超过 Prisma 事务超时   | 模型审核和评分在打开事务前完成，事务只包住数据库写入，并用发布回归测试防止再次把审核移回事务内 |
+| AI 审核期间草稿被再次保存         | 事务内按审核前的 `draft.version` 做校验，版本变化则返回冲突错误，要求用户重新审核和发布        |
+| 工作台页面过大                    | 新增 `PromptManagerPanel` 和 `prompt-management.ts` 分担 UI 与纯状态逻辑                       |
 
 回滚方案：
 
