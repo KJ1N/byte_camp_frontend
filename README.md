@@ -1,169 +1,207 @@
-# 文舟 AI Creator Hub
+# 文舟 Content Harbor · AI 创作者辅助生产与分发平台
 
-2026 字节前端训练营项目：AI 创作者辅助生产、审核与分发平台。
+文舟是面向图文创作者的 AI 辅助生产、审核与分发平台，也是 2026 字节前端训练营的全栈交付项目。它把单点式“AI 生成器”扩展为**可创作、可编辑、可审核、可评分、可发布、可分发、可反馈**的内容生产闭环。
 
-AI Creator Hub 是面向图文创作者的 AIGC 辅助生产与分发平台。项目目标是把“AI 生成器”升级为完整的内容生产闭环：创作、编辑、审核、发布、分发、数据反馈与二次优化。
-
-当前代码已基本完成 MVP 主闭环：登录、创作、编辑、审核评分、发布、信息流/榜单分发、互动数据反馈、素材管理、每日资讯选题和多模态图文生成均已落地。剩余工作主要集中在线上部署、效果评估报告、首页性能复测和接口层测试补齐。
-
-## 项目结构
+当前仓库为最终代码交付版，已包含前端应用、后端服务、共享类型、数据库模型、演示数据、自动化测试、E2E 脚本、技术文档和效果评估报告。本地可完整演示主链路，线上地址由实际部署平台提供。
 
 ```text
-.
-├── apps
-│   ├── api      # NestJS 后端服务
-│   └── web      # Next.js 前端应用
-├── packages
-│   └── shared   # 前后端共享 DTO、枚举和常量
-├── docs         # PRD、技术架构、审核规则、评估方案和 dev plan
-├── e2e          # Playwright smoke 与榜单性能 E2E
-├── scripts      # 本地开发、数据库和 E2E 自动化脚本
-└── docker-compose.yml
+技术栈   Next.js · React · NestJS · Prisma · PostgreSQL · Redis · TypeScript · Tailwind CSS
+模型     OpenAI-compatible Provider（适配火山方舟 / 豆包等），支持 mock / auto / live 三种模式
 ```
 
-## 技术栈
+### 项目覆盖度
 
-| 层级 | 选型 |
-| --- | --- |
-| Monorepo | pnpm workspace |
-| 前端 | Next.js + React + TypeScript + Tailwind CSS |
-| 后端 | NestJS + TypeScript |
-| 数据库 | PostgreSQL + Prisma |
-| 缓存/榜单 | Redis Sorted Set |
-| AI 接入 | OpenAI SDK 兼容模式，适配火山方舟/豆包等模型 |
-| 测试 | Node test runner + TypeScript typecheck + Playwright E2E |
-| 部署 | 前端 Vercel，后端 Railway/Render/ECS，托管 PostgreSQL/Redis |
+本项目完整实现训练营 MVP 的核心闭环，并补充多模态、素材审核、每日资讯和性能 E2E 等扩展能力。
 
-## 开发进度与剩余待办
+| 项目要求                        | 实现情况                     | 位置                                                          |
+| ------------------------------- | ---------------------------- | ------------------------------------------------------------- |
+| **基础要求**                    |                              |                                                               |
+| 用户登录与创作者入口            | 完整实现                     | [一、项目能力](#一项目能力)                                   |
+| AI 生成标题、大纲和正文         | 完整实现，支持 SSE 流式输出  | [一、项目能力](#一项目能力)                                   |
+| 富文本草稿编辑与自动保存        | 完整实现，含离线暂存和版本   | [一、项目能力](#一项目能力)                                   |
+| 发布前安全审核与质量评分        | 完整实现，后端强制执行       | [二、系统架构与关键实现](#二系统架构与关键实现)               |
+| 内容发布、详情页、信息流与榜单  | 完整实现，互动数据参与排序   | [一、项目能力](#一项目能力)                                   |
+| 自动化测试与交付文档            | 已覆盖 typecheck/test/E2E/CI | [三、快速开始](#三快速开始) · [八、交付与验收](#八交付与验收) |
+| **扩展能力**                    |                              |                                                               |
+| Prompt 模板管理、标题优化和改写 | 完整实现                     | [一、项目能力](#一项目能力)                                   |
+| 一键合规改写                    | 完整实现                     | [二、系统架构与关键实现](#二系统架构与关键实现)               |
+| 多模态图文生成                  | 完整实现                     | [一、项目能力](#一项目能力)                                   |
+| 图片/资料素材上传、抽取与审核   | 完整实现                     | [一、项目能力](#一项目能力)                                   |
+| 每日 AI 资讯/热点资讯选题预填   | 完整实现，支持 Redis 快照    | [一、项目能力](#一项目能力)                                   |
+| 榜单 LCP 与无限滚动性能 E2E     | 完整实现                     | [三、快速开始](#三快速开始)                                   |
 
-> 勾选前建议先确认对应功能已经完成页面验证、接口验证和必要的 `typecheck` / `build` / 测试。新增关键功能时，仍按 `AGENTS.md` 要求先写 `docs/dev_plan/` 技术方案，完成后补充 `docs/learn/` 本地学习文档。
+详细产品、架构、审核与评估文档见 [docs](./docs)，协作规则见 [AGENTS.md](./AGENTS.md)。
 
-### 当前完成概览
+### 演示入口
 
-- [x] MVP 主链路已打通：登录 -> 创作 -> 草稿编辑 -> 审核评分 -> 发布 -> 详情页 -> 榜单/信息流 -> 互动反馈。
-- [x] AI 能力已覆盖文章生成、标题优化、正文改写、合规改写、多模态图文生成和素材/图片审核。
-- [x] 创作者侧已接入真实作品管理、统计反馈、每日资讯选题、工作台预填和多模态入口。
-- [x] 已有较多 Service/Controller/helper 单元测试，以及 Playwright smoke E2E 和榜单 LCP 性能 E2E。
-- [ ] 待完成线上部署、效果评估报告、首页 Lighthouse 或等价性能复测、完整接口层测试和用户资料页。
+| 服务     | 地址                           |
+| -------- | ------------------------------ |
+| Web      | `http://localhost:3200`        |
+| API      | `http://localhost:3201`        |
+| 健康检查 | `http://localhost:3201/health` |
 
-### 已完成基础
+Seed 演示账号：
 
-- [x] 建立 pnpm workspace monorepo，拆分 `apps/web`、`apps/api`、`packages/shared`。
-- [x] 完成 PRD、技术架构、审核规则、评估方案等基础文档。
-- [x] 完成用户注册、登录、JWT 鉴权、bcrypt 密码哈希和前端退出登录。
-- [x] 完成首页内容入口、登录态用户名展示、hover 菜单和创作者主页入口。
-- [x] 完成创作工作台的主题输入、AI 生成文章、草稿保存链路。
-- [x] 接入 OpenAI-compatible 真实模型生成能力，支持 `auto` / `mock` / `live` 三种后端模式。
-- [x] 完成工作台流式 AI 生成体验，文章初稿、标题优化和正文改写均通过 SSE 逐步渲染。
-- [x] 完成草稿箱列表、草稿编辑页基础能力和工作台本地暂存恢复。
-- [x] 完成创作者主页 `/creator`，包含左侧导航、草稿动态、真实统计、作品管理、每日资讯和工作台预填。
-- [x] 完成 Prisma 核心数据模型：用户、草稿、版本、审核记录、质量分、文章、互动事件、榜单快照。
-- [x] 完成创作者概览、每日资讯、工作台预填、多模态正文组装等核心 helper 与服务测试。
+```text
+邮箱：demo@bytecamp.local
+密码：bytecamp123
+```
 
-### 功能进度
+---
 
-#### 1. 编辑器与草稿闭环
+## 目录
 
-- [x] 完善富文本编辑器工具栏：加粗、列表、引用、图片插入等 PRD 中的基础编辑能力。
-- [x] 实现草稿编辑停止后的防抖自动保存，增加保存中、已保存、保存失败的页面状态。
-- [x] 实现断网本地暂存，网络恢复后同步到后端。
-- [x] 实现草稿编辑页输入即本地保存，刷新页面不丢失刚输入的标题和正文。
-- [x] 实现创作工作台本地暂存、刷新恢复，以及离开工作台时保存/不保存/继续编辑确认。
-- [x] 完成草稿版本历史 UI，支持查看历史版本。
-- [x] 完成草稿版本回滚 API 和页面操作。
-- [x] 增加草稿编辑冲突提示，避免多端编辑覆盖内容。
+1. [项目能力](#一项目能力)
+2. [系统架构与关键实现](#二系统架构与关键实现)
+3. [快速开始](#三快速开始)
+4. [目录结构](#四目录结构)
+5. [常见问题](#五常见问题)
+6. [技术栈一览](#六技术栈一览)
+7. [开发过程](#七开发过程)
+8. [交付与验收](#八交付与验收)
 
-#### 2. AI 创作能力
+---
 
-- [x] 完成 Prompt 模板接口和工作台模板选择 UI。
-- [x] 支持平台 Prompt 模板只读、用户复制为私人模板，并在工作台新增/修改/删除自定义 Prompt。
-- [x] 增加标题优化能力，生成多个标题候选。
-- [x] 增加正文改写能力：润色、扩写、缩写、风格转换。
-- [x] 增加 AI 生成的超时、重试配置和 mock 降级模式。
-- [x] 新增多模态图文生成流式接口 `POST /ai/generate-multimodal/stream`，支持正文流、图片计划、图片生成状态和完成图片返回。
-- [x] 记录 AI 请求日志：requestId、模型、耗时、token、状态。（当前写入后端结构化服务日志，未做数据库日志查询页）
+## 一、项目能力
 
-#### 3. 审核、评分与发布
+文舟围绕图文内容的**生产、审核、发布、分发、反馈**构建完整闭环。
 
-- [x] 新增 `POST /audit/check` 接口，返回 PASS / WARN / BLOCK、风险片段和修改建议。
-- [x] 发布前审核接入后端 AI Gateway 模型能力，保留 `auto` / `mock` / `live` 模式和结构化输出校验。
-- [x] 新增 `POST /scoring/article` 接口，接入后端 AI Gateway 模型评分能力，返回五维质量分、总分、原因和优化建议。
-- [x] 实现发布入口：从草稿编辑页触发发布前审核和质量评分。
-- [x] 实现 `POST /publish/:draftId`，审核通过后生成文章快照。
-- [x] BLOCK 内容禁止发布，WARN 内容展示原因并引导修改后重审。
-- [x] 增加一键合规改写能力，用 AI 生成替代表达。
-- [x] 发布前审核支持正文和图片节点拆分，分别写入文字/图片审核记录后聚合 PASS / WARN / BLOCK。
-- [x] 在草稿或发布确认页展示审核记录和质量评分结果。
+| 能力             | 说明                                                                                                                                            |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 账号与创作者入口 | 支持注册、登录、JWT 鉴权、退出登录；首页用户菜单可进入工作台、草稿箱和创作者主页；Creator 页面展示真实作品、统计和“我的内容”。                  |
+| AI 内容创作      | 支持主题生成文章、Prompt 模板选择、标题优化、正文润色/扩写/缩写/风格转换；文章生成、标题优化、正文改写和合规改写均支持 SSE 流式体验。           |
+| 富文本草稿       | 基于 TipTap / ProseMirror JSON 存储内容；支持标题、段落、加粗、列表、引用、图片、资料附件、自动保存、离线暂存、刷新恢复、版本历史和版本回滚。   |
+| Prompt 管理      | 平台 Prompt 只读，用户可复制为私人模板；工作台支持新增、修改、删除自定义 Prompt，并在生成链路中使用。                                           |
+| 审核与评分       | 发布前由后端强制执行安全审核和质量评分；支持 PASS / WARN / BLOCK、风险片段、风险类别、改写建议、质量五维分和审核记录持久化。                    |
+| 合规改写         | WARN / BLOCK 内容可触发 AI 一键合规改写，生成替代表达后回写草稿，再重新审核发布。                                                               |
+| 发布与二次编辑   | 审核通过后生成文章快照和详情页；已发布内容可撤回，也可二次编辑并重新进入审核发布流程。                                                          |
+| 信息流与榜单     | 首页推荐流、热点榜、爆文榜均由后端提供；Redis Sorted Set 缓存榜单，Redis 不可用时回退 PostgreSQL；阅读、点赞、收藏会影响排序和创作者数据反馈。  |
+| 素材与多媒体     | 支持图片、txt、md、docx 资料上传；素材按文件夹管理；资料文本抽取后参与审核；图片支持视觉审核和发布前同源审核。                                  |
+| 多模态工作台     | 独立 `/multimodal-workspace` 支持生成正文、图片计划、图片状态和 1 到 4 张配图；生成结果可保存为富文本草稿并继续审核发布。                       |
+| 每日资讯选题     | Creator 页面展示每日 AI 资讯和热点资讯；后端统一接入外部资讯源，支持 Redis 当天快照、最近非空快照、手动刷新和 mock 模式；资讯可一键预填工作台。 |
+| 自动化验证       | 已覆盖后端 Service/Controller 测试、前端 helper 测试、Playwright 主链路 smoke E2E、榜单 LCP 与无限滚动性能 E2E、GitHub Actions CI。             |
 
-#### 4. 内容详情、信息流与榜单
+核心演示路径：
 
-- [x] 新增文章详情页 `/articles/[id]`，展示作者、发布时间、正文和发布审核/评分信息。
-- [x] 文章详情页返回按钮按浏览器上一页返回，不再固定跳首页。
-- [x] 新增推荐信息流接口 `GET /feed`，首页内容从后端读取。
-- [x] 新增热点榜 `GET /rankings/hot` 和爆文榜 `GET /rankings/top`。
-- [x] 使用 Redis Sorted Set 维护榜单，Redis 不可用时回退到 PostgreSQL。
-- [x] 首页、榜单和信息流支持分页或无限滚动。
-- [x] 实现阅读、点赞、收藏等互动事件写入。
-- [x] 让互动数据进入榜单排序。
-- [x] 让互动数据进入创作者数据反馈。
+```text
+登录 -> 首页 -> 创作者主页 / 工作台 -> AI 生成 -> 保存草稿 -> 富文本编辑
+  -> 发布前审核与评分 -> 合规改写或发布 -> 文章详情 -> 信息流/榜单 -> 互动反馈
+```
 
-#### 5. 创作者管理、每日资讯与数据反馈
+---
 
-- [x] 发布功能完成后，把创作者主页的“作品管理”从占位改成真实列表。
-- [x] 创作者主页统计接入真实数据：阅读量、作品数、互动数据和平均质量分；粉丝数因关注模型暂未接入，当前明确展示为 0。
-- [ ] 增加用户资料页，支持头像、昵称和基础创作者信息展示。（本阶段按确认暂缓）
-- [x] 增加“我的内容”统一列表，区分草稿、待审核、已发布、已撤回。
-- [x] 支持已发布内容二次编辑，并重新进入审核发布流程。
-- [x] 支持作者撤回已发布内容。
-- [x] Creator 页面接入每日 AI 资讯和每日热点资讯，作为创作者选题素材。
-- [x] 新增 `GET /news/creator-daily`，后端统一调用外部资讯源，前端不直接访问第三方接口。
-- [x] 每日资讯支持 Redis 当天快照、最近非空快照、手动刷新和 mock 模式。
-- [x] 点击资讯卡片可一次性预填工作台主题、标题、风格和正文素材。
+## 二、系统架构与关键实现
 
-#### 6. 素材与多媒体
+### Monorepo 布局
 
-- [x] 新增素材上传模块，支持图片和 txt / md / docx 资料文件上传，并按文件夹管理。
-- [x] 对上传素材进行基础合规校验、图片视觉审核和资料文本发布前同源审核，素材文件使用云存储/CDN URL 契约。
-- [x] 兼容微信导入等 docx 正文抽取格式，避免正文存在但被误判为缺少内容。
-- [x] 在编辑器中插入和管理图片素材、资料附件卡片和选中的资料文本。
-- [x] 完成独立多模态生成工作台 `/multimodal-workspace`，支持 1 到 4 张配图生成、图片 Prompt、图片状态预览和草稿保存。
-- [x] 多模态生成结果会组合为 ProseMirror 富文本草稿，正文与完成图片可继续编辑、审核、发布和分发。
+```text
+apps/web          Next.js App Router 前端，负责页面、组件、编辑器、SSE 消费和本地状态
+apps/api          NestJS 后端，负责鉴权、AI 编排、审核、评分、发布、榜单、素材和资讯
+packages/shared   前后端共享类型、枚举、DTO、评分权重和内容结构契约
+docs              PRD、架构、审核规则、评估报告和每个关键功能的 dev plan
+e2e               Playwright 主链路与榜单性能用例
+scripts           本地开发端口避让、E2E 环境和种子数据脚本
+```
 
-#### 7. 测试、部署与交付
+`packages/shared` 是前后端契约的单点来源；`apps/web` 不保存 AI 密钥，不负责审核裁决、质量评分或榜单排序；这些后端职责集中在 `apps/api`。
 
-- [ ] 增加 Auth、Drafts、Audit、Scoring、Publish 的后端接口测试。（当前已有主要 Service/Controller 单元测试，尚缺完整接口层覆盖）
-- [x] 增加登录 -> 创作 -> 保存草稿 -> 审核 -> 发布 -> 查看详情的 Playwright smoke E2E。
-- [x] 增加榜单性能 Playwright E2E，验证热点榜/爆文榜首屏 LCP 不超过 2.5 秒并支持无限滚动。
-- [x] 准备演示 seed 数据，覆盖正常内容、WARN 内容、BLOCK 内容和榜单内容。
-- [x] 配置 CI，至少运行 typecheck、测试和前端 build。
-- [ ] 完成线上部署：Web、API、PostgreSQL、Redis 和必要环境变量。
-- [ ] 完成效果评估报告，覆盖生成、审核、分发、性能和工程化指标。
-- [ ] 使用 Lighthouse 或等价工具补充首页 LCP 与综合性能报告，目标不超过 2.5 秒。
+### 总体架构
 
-### 当前剩余重点改动
+```text
+Browser
+  |
+  | HTTP / SSE
+  v
+Next.js Web
+  |
+  | REST / SSE
+  v
+NestJS API
+  |        |         |
+  |        |         +--> OpenAI-compatible Provider / Volcano Ark / Doubao
+  |        +------------> Redis
+  +---------------------> PostgreSQL + Prisma
+```
 
-- 完成线上部署：Web、API、PostgreSQL、Redis 和生产环境变量。
-- 完成效果评估报告：覆盖生成、审核、分发、性能和工程化指标。
-- 使用 Lighthouse 或等价工具补充首页 LCP 与综合性能报告；榜单 LCP 已有 Playwright 性能 E2E。
-- 补齐 Auth、Drafts、Audit、Scoring、Publish 的接口层测试；当前已有较多 Service/Controller 单元测试、helper 单测、Playwright smoke E2E 和榜单性能 E2E。
-- 用户资料页仍按前期确认暂缓，后续如要完善创作者资料再单独开发。
+### 后端领域模块
 
-## 本地启动
+```text
+auth          注册、登录、JWT、bcrypt、当前用户上下文
+users         创作者概览、作品统计、我的内容聚合
+drafts        草稿 CRUD、版本快照、版本回滚、删除联动
+prompts       平台 Prompt、私人 Prompt、复制与编辑
+ai-gateway    模型适配、Prompt 装配、结构化输出、SSE、请求日志、mock/live 降级
+audit         内容审核与合规改写
+scoring       五维质量评分
+publish       审核评分聚合、发布快照、文章详情、撤回
+feed          推荐信息流
+ranking       热点榜、爆文榜、Redis 缓存与 PostgreSQL 回退
+analytics     阅读、点赞、收藏事件
+assets        素材上传、资料抽取、云存储契约、图片视觉审核
+news          每日资讯接入、Redis 快照、mock 降级
+common        SSE 工具、健康检查、环境路径
+```
+
+### 关键设计与核心实现
+
+| 技术支柱       | 核心实现                                                                                                     | 深入阅读                                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI 集中编排    | AI Gateway 统一处理模型配置、OpenAI-compatible 调用、Prompt 渲染、结构化解析、SSE 流、超时重试和 mock 降级。 | [技术架构](./docs/architecture.md) · [模型接入方案](./docs/dev_plan/007-model-provider-integration.md)                                       |
+| 草稿编辑闭环   | 工作台生成后保存为草稿；编辑页支持富文本、自动保存、离线暂存、刷新恢复、版本历史、版本回滚和冲突提示。       | [草稿方案](./docs/dev_plan/002-creation-workbench-drafts.md) · [离线同步方案](./docs/dev_plan/015-draft-offline-sync-and-redis-ranking.md)   |
+| 发布审核流水线 | 发布由后端强制触发审核和评分；正文与图片节点可拆分审核后聚合裁决；BLOCK 不发布，WARN 引导修改后重审。        | [审核发布方案](./docs/dev_plan/004-audit-scoring-publish.md) · [审核规则](./docs/audit-rules.md)                                             |
+| 合规改写       | 对有风险的审核结果生成替代表达，返回富文本正文和建议，用户确认后写回草稿。                                   | [合规改写方案](./docs/dev_plan/011-compliance-rewrite-publish-review.md)                                                                     |
+| 分发与榜单     | 基于质量分、热度、时间新鲜度和互动反馈计算 rank score；Redis 缓存榜单，失败时回退 PostgreSQL。               | [分发方案](./docs/dev_plan/006-feed-ranking-analytics.md) · [榜单性能方案](./docs/dev_plan/019-ranking-infinite-scroll-lcp.md)               |
+| 素材与视觉审核 | 图片和资料上传后进行基础校验、资料文本抽取、视觉审核、云存储 URL 契约；发布前对正文图片进行同源审核。        | [素材方案](./docs/dev_plan/016-assets-cloud-vision-audit.md) · [图片审核方案](./docs/dev_plan/023-publish-image-download-base64-audit.md)    |
+| 多模态生成     | 流式返回正文、图片计划、图片生成状态和完成图片；结果组合为 ProseMirror 富文本草稿。                          | [多模态方案](./docs/dev_plan/020-multimodal-generation-workbench.md)                                                                         |
+| 每日资讯选题   | 后端统一请求外部日更资讯，支持实时接口、Redis 当天快照、最近非空快照、mock 演示和工作台预填。                | [资讯预填方案](./docs/dev_plan/021-creator-daily-news-prefill.md) · [资讯缓存方案](./docs/dev_plan/022-creator-daily-news-redis-snapshot.md) |
+
+---
+
+## 三、快速开始
+
+### 前置依赖
+
+- Node.js `>= 22`
+- pnpm `>= 10`，如本机未启用可先执行 `corepack enable`
+- Docker Desktop，或可用的本地 PostgreSQL / Redis
+
+### 环境变量
+
+复制环境变量模板：
 
 ```bash
 cp .env.example .env
-pnpm install
-pnpm db:up
-pnpm prisma:migrate
-pnpm prisma:seed
-pnpm dev
 ```
 
-本项目统一使用仓库根目录的 `.env` 作为本地配置来源。API 会显式读取根目录 `.env`，不要在 `apps/api/.env` 或 `apps/web/.env` 里维护另一份配置，否则容易出现模型名、端口或密钥看起来已经修改但运行时没有生效的问题。
+本项目统一读取仓库根目录 `.env`。不要在 `apps/api/.env` 或 `apps/web/.env` 维护另一份配置，避免端口、模型或密钥配置看起来已修改但运行时未生效。
 
-AI 生成默认使用 `AI_PROVIDER_MODE=auto`：当 `.env` 中配置了真实 `AI_API_KEY` 和 `AI_MODEL` 时，后端会通过 OpenAI-compatible provider 生成文章；当密钥仍是占位值时，会自动使用本地 mock，保证无密钥也能完成开发演示。
+重点检查：
 
-如需强制真实模型调用：
+| 变量                                                       | 用途                         | 说明                                         |
+| ---------------------------------------------------------- | ---------------------------- | -------------------------------------------- |
+| `NEXT_PUBLIC_API_BASE_URL`                                 | Web 访问 API 的基础地址      | `pnpm dev` 会自动注入可用 API 地址           |
+| `PORT`                                                     | API 服务端口                 | 默认 `3201`                                  |
+| `JWT_SECRET` / `JWT_EXPIRES_IN`                            | 登录态签名与过期时间         | 生产环境必须使用强 secret                    |
+| `DATABASE_URL`                                             | PostgreSQL 连接              | Prisma migration、seed、API 运行依赖         |
+| `E2E_DATABASE_URL`                                         | E2E 专用数据库               | 必须和 `DATABASE_URL` 不同                   |
+| `REDIS_URL`                                                | Redis 连接                   | 榜单缓存和每日资讯快照依赖；不可用时有降级   |
+| `AI_PROVIDER_MODE`                                         | 文本模型模式                 | `auto` / `mock` / `live`                     |
+| `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`                  | OpenAI-compatible 文本模型   | live 模式必须配置                            |
+| `AI_IMAGE_MODEL` / `AI_IMAGE_TIMEOUT_MS` / `AI_IMAGE_SIZE` | 图片生成配置                 | 多模态工作台可选                             |
+| `ASSET_STORAGE_MODE`                                       | 素材存储模式                 | `mock` 或 `s3`                               |
+| `ASSET_AUDIT_MODE` / `ASSET_VISION_MODEL`                  | 图片与资料审核               | `auto` 会在凭据齐备时使用真实模型，否则 mock |
+| `PUBLIC_API_BASE_URL`                                      | 稳定图片 URL 的 API 公网地址 | 生产部署建议配置                             |
+| `NEWS_PROVIDER_MODE` / `NEWS_FETCH_TIMEOUT_MS`             | 每日资讯模式与超时           | `mock` 适合课堂演示                          |
+
+离线演示推荐：
+
+```env
+AI_PROVIDER_MODE=mock
+ASSET_AUDIT_MODE=mock
+NEWS_PROVIDER_MODE=mock
+```
+
+真实模型调用示例：
 
 ```env
 AI_PROVIDER_MODE=live
@@ -173,39 +211,37 @@ AI_MODEL=your-model-name
 AI_TIMEOUT_MS=60000
 AI_MAX_RETRIES=1
 
-# 多模态图片生成默认复用 AI_API_KEY，可按需覆盖图片模型和超时
 AI_IMAGE_MODEL=doubao-seedream-4-5-251128
 AI_IMAGE_TIMEOUT_MS=120000
 AI_IMAGE_MAX_RETRIES=1
 AI_IMAGE_SIZE=2K
-
-# 图片素材审核默认复用 AI_API_KEY 和 AI_MODEL；如需单独视觉模型，可配置 ASSET_VISION_MODEL
-ASSET_AUDIT_MODE=auto
-ASSET_VISION_MODEL=
-
-# 每日资讯默认 auto：优先实时接口，失败后读取已有缓存；演示数据需显式使用 mock
-NEWS_PROVIDER_MODE=auto
-NEWS_FETCH_TIMEOUT_MS=12000
 ```
 
-如需课堂演示或离线开发：
+### 启动步骤
 
-```env
-AI_PROVIDER_MODE=mock
-ASSET_AUDIT_MODE=mock
-NEWS_PROVIDER_MODE=mock
+```bash
+# 1. 安装依赖
+pnpm install
+
+# 2. 启动本地 PostgreSQL + Redis
+pnpm db:up
+
+# 3. 执行 Prisma migration 并写入演示数据
+pnpm prisma:migrate
+pnpm prisma:seed
+
+# 4. 启动 Web + API
+pnpm dev
 ```
 
-`pnpm dev` 会先检测本机端口，再自动启动：
+`pnpm dev` 会检测本机端口并自动启动：
 
-```text
-Web: 默认优先 http://localhost:3200
-API: 默认优先 http://localhost:3201
-```
+| 服务 | 默认优先地址            |
+| ---- | ----------------------- |
+| Web  | `http://localhost:3200` |
+| API  | `http://localhost:3201` |
 
-如果端口被占用，或 Windows 因 Docker / WSL2 / Hyper-V / VPN 把某些端口放入 excluded port range，脚本会自动尝试下一个可用端口，并把 `NEXT_PUBLIC_API_BASE_URL` 注入到 Web 进程。
-
-如需手动指定端口，使用：
+如端口被占用，脚本会自动尝试下一个可用端口，并把 `NEXT_PUBLIC_API_BASE_URL` 注入 Web 进程。也可以手动指定：
 
 ```powershell
 $env:WEB_PORT="3200"
@@ -213,37 +249,35 @@ $env:API_PORT="3201"
 pnpm dev
 ```
 
-如果需要绕过自动端口脚本，使用原始 workspace 并行启动：
+如需绕过端口自检脚本：
 
 ```bash
 pnpm dev:raw
 ```
 
-榜单缓存和每日资讯快照都使用 `.env` 中的 `REDIS_URL`。本地 `docker-compose.yml` 会随数据库一起启动 Redis；如果没有配置或 Redis 临时不可用，热点榜和爆文榜会自动回退到 PostgreSQL 查询与内存排序，每日资讯会继续请求实时接口，并在外部失败时使用已有内存/Redis 缓存。演示数据需通过 `NEWS_PROVIDER_MODE=mock` 显式启用。
+### 质量检查
 
-## E2E Smoke 验证
-
-本项目提供一条 Playwright smoke E2E，用于验证演示主链路：
-
-```text
-登录 -> 工作台创作 -> 保存草稿 -> 审核评分 -> 发布 -> 查看文章详情
-```
-
-Smoke E2E 会登录、创建草稿、发布文章并写入互动链路相关数据，因此也必须使用 E2E 专用数据库，不能写入当前开发/演示数据库。
-
-本地运行前先启动数据库服务：
+本地检查命令与 CI 保持一致：
 
 ```bash
-pnpm db:up
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
-然后准备 E2E 数据库。Docker Compose 启动的 PostgreSQL 默认用户是 `postgres/postgres`，可以用任意 PostgreSQL 客户端执行：
+提交前建议至少确保 typecheck、test、build 通过。功能验收还需要真实启动应用，按演示路径走一遍关键流程。
+
+### E2E 验证
+
+Smoke E2E 会创建草稿、审核评分、发布文章并写入互动数据，必须使用独立测试数据库。
+
+先创建 E2E 数据库，例如：
 
 ```sql
 CREATE DATABASE bytecamp_aigc_e2e;
 ```
 
-在根目录 `.env` 中配置：
+在 `.env` 中确保：
 
 ```env
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bytecamp_aigc
@@ -254,41 +288,235 @@ E2E_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bytecamp_aigc_e2e
 
 ```bash
 pnpm test:e2e:smoke
-```
-
-`pnpm test:e2e:smoke` 会先校验 `E2E_DATABASE_URL`，对 E2E 数据库执行 Prisma migration 和 seed，然后自动启动 API 和 Web，并强制使用 `AI_PROVIDER_MODE=mock`，避免依赖真实模型密钥。脚本会把 API 的 `DATABASE_URL` 指向 `E2E_DATABASE_URL`，且不会回退到开发库。Windows 本地默认使用系统 Chrome；如果环境没有可用浏览器，可先运行：
-
-```bash
-pnpm playwright:install
-```
-
-## 榜单性能 E2E 与测试数据库
-
-榜单首屏 LCP 和滚动加载使用独立 Playwright 性能 E2E 验证。该用例会写入专门的测试文章、质量分和互动数据，所以同样使用上面配置的 `E2E_DATABASE_URL`，不能指向当前开发/演示数据库。
-
-注意：
-
-- `E2E_DATABASE_URL` 必须和 `DATABASE_URL` 不同。
-- `E2E_DATABASE_URL` 不能指向默认开发库 `bytecamp_aigc`。
-- 性能 E2E 的测试文章 ID 使用 `e2e-ranking-lcp-*` 前缀，只应出现在 E2E 数据库中。
-
-运行榜单性能 E2E：
-
-```bash
 pnpm test:e2e:rankings-performance
 ```
 
-该脚本会：
+E2E 脚本会校验 `E2E_DATABASE_URL`，避免误写开发库；运行时强制使用 `AI_PROVIDER_MODE=mock`，不依赖真实模型密钥。
 
-1. 校验 `E2E_DATABASE_URL`，防止误写开发库。
-2. 对 E2E 数据库执行 Prisma migration。
-3. 写入榜单性能测试数据。
-4. 启动 API 和 Web，并强制使用 mock AI。
-5. 用 Playwright 打开热点榜和爆文榜，采集 LCP 并验证滚动加载。
+### 常用脚本
 
-## 文档
+| 命令                                 | 用途                                     |
+| ------------------------------------ | ---------------------------------------- |
+| `pnpm dev`                           | 启动本地 Web/API，自动避让端口           |
+| `pnpm dev:raw`                       | 使用 workspace 原始并行 dev              |
+| `pnpm build`                         | 构建 shared、API 和 Web                  |
+| `pnpm typecheck`                     | 全 workspace 类型检查                    |
+| `pnpm test`                          | 运行后端、前端 helper 和 Controller 测试 |
+| `pnpm test:e2e:smoke`                | 运行创作到发布主链路 E2E                 |
+| `pnpm test:e2e:rankings-performance` | 运行榜单 LCP 与无限滚动性能 E2E          |
+| `pnpm playwright:install`            | 安装 Playwright Chromium                 |
+| `pnpm prisma:migrate`                | 执行 Prisma migration                    |
+| `pnpm prisma:seed`                   | 写入演示账号、Prompt 和榜单文章          |
+| `pnpm db:up` / `pnpm db:down`        | 启动或停止本地 PostgreSQL / Redis        |
 
-- [完整 PRD](./docs/PRD.md)
+---
+
+## 四、目录结构
+
+```text
+apps/web/src/app                      前端页面与路由
+  ├── page.tsx                        内容首页 / 推荐信息流入口
+  ├── login/                          登录注册
+  ├── creator/                        创作者主页、作品管理、每日资讯
+  ├── workspace/                      创作工作台
+  ├── multimodal-workspace/           多模态图文生成工作台
+  ├── drafts/                         草稿箱与草稿编辑器
+  ├── publish/                        发布确认、审核评分、合规改写
+  ├── articles/                       文章详情与互动
+  ├── rankings/                       热点榜 / 爆文榜
+  └── docs/                           发文规范
+
+apps/web/src/components               前端复用组件
+  ├── editor/                         TipTap 富文本编辑器与查看器
+  ├── ai-writing-assistant.tsx        AI 创作助手面板
+  ├── asset-panel.tsx                 素材管理面板
+  └── prompt-manager-panel.tsx        Prompt 管理面板
+
+apps/web/src/lib                      前端状态与数据处理 helper
+  ├── ai-stream.ts                    SSE 解析与流式正文组装
+  ├── rich-text-document.ts           ProseMirror 文档工具
+  ├── draft-offline-state.ts          草稿离线暂存
+  ├── workspace-prefill.ts            每日资讯预填
+  └── ranking-guidance.ts             榜单解释文案
+
+apps/api/src                          NestJS 后端
+  ├── auth/                           注册、登录、JWT Guard
+  ├── users/                          创作者概览
+  ├── drafts/                         草稿、版本、回滚、删除
+  ├── prompts/                        Prompt 模板
+  ├── ai-gateway/                     模型适配、SSE、生成、改写、多模态
+  ├── audit/                          内容审核与合规改写
+  ├── scoring/                        质量评分
+  ├── publish/                        发布、详情、撤回
+  ├── feed/                           推荐信息流
+  ├── ranking/                        榜单计算与 Redis 缓存
+  ├── analytics/                      互动事件
+  ├── assets/                         素材上传、存储、审核
+  ├── news/                           每日资讯与 Redis 快照
+  ├── prisma/                         Prisma Service
+  └── common/                         SSE、健康检查、环境路径
+
+apps/api/prisma                       Prisma schema、migration、seed
+packages/shared/src                   前后端共享枚举、DTO、内容结构和评分权重
+docs                                  PRD、架构、审核规则、评估方案、dev plan、评估报告
+e2e                                  Playwright smoke 与榜单性能用例
+scripts                              本地 dev 和 E2E 编排脚本
+```
+
+---
+
+## 五、常见问题
+
+### pnpm 命令找不到
+
+项目要求 Node.js 22+ 和 pnpm 10+。如果系统没有全局 pnpm，可先启用 Corepack：
+
+```bash
+corepack enable
+corepack pnpm install
+```
+
+也可以直接使用仓库中的脚本命令，例如 `corepack pnpm typecheck`。
+
+### AI 为什么返回 mock 内容
+
+默认 `AI_PROVIDER_MODE=auto`。当 `.env` 中的 `AI_API_KEY` 或 `AI_MODEL` 仍是占位值时，后端会自动使用 mock，保证无密钥也能演示。要强制真实模型调用，需要配置：
+
+```env
+AI_PROVIDER_MODE=live
+AI_API_KEY=your-provider-key
+AI_MODEL=your-model-name
+```
+
+### 发布时为什么被 WARN 或 BLOCK
+
+发布前审核是强制流程。`BLOCK` 会禁止发布，`WARN` 会给出风险片段和修改建议。可以修改草稿后重新审核，也可以使用“一键合规改写”生成替代表达。
+
+### Redis 不可用会不会影响演示
+
+不会中断核心链路。热点榜和爆文榜会回退到 PostgreSQL 查询与内存排序；每日资讯会按实时接口、最近缓存、mock 或空状态降级。
+
+### E2E 为什么必须配置独立数据库
+
+E2E 会创建草稿、发布文章并写入互动事件。为避免污染开发/演示数据，脚本会强制校验 `E2E_DATABASE_URL`，并要求它不能等于 `DATABASE_URL`。
+
+### 端口被占用怎么办
+
+优先使用 `pnpm dev`。脚本会自动检测 Web/API 端口并避让。如果需要固定端口，可设置：
+
+```powershell
+$env:WEB_PORT="3200"
+$env:API_PORT="3201"
+pnpm dev
+```
+
+### 图片或资料审核不符合预期
+
+本地演示可使用 `ASSET_AUDIT_MODE=mock`。真实视觉审核需要配置 `AI_API_KEY`、`AI_MODEL` 或 `ASSET_VISION_MODEL`。发布前还会对正文中的图片节点进行聚合审核。
+
+---
+
+## 六、技术栈一览
+
+| 层级     | 选型                                                                |
+| -------- | ------------------------------------------------------------------- |
+| Monorepo | pnpm workspace                                                      |
+| 前端     | Next.js App Router · React · TypeScript · Tailwind CSS              |
+| 编辑器   | TipTap · ProseMirror JSON                                           |
+| 后端     | NestJS · TypeScript                                                 |
+| 数据库   | PostgreSQL · Prisma ORM                                             |
+| 缓存     | Redis Sorted Set                                                    |
+| AI       | OpenAI SDK 兼容模式 · 火山方舟 / 豆包等 OpenAI-compatible provider  |
+| 鉴权     | JWT · bcryptjs                                                      |
+| 素材     | mock CDN URL / S3-compatible object storage contract                |
+| 测试     | Node test runner · Controller/Service/helper tests · Playwright E2E |
+| 工程     | TypeScript · Prettier · GitHub Actions CI                           |
+| 部署建议 | Vercel · Railway / Render / ECS · 托管 PostgreSQL · Upstash / Redis |
+
+---
+
+## 七、开发过程
+
+本项目按“业务闭环”而不是按技术栈孤立推进。每一轮功能都先明确用户价值和端到端链路，再拆出前端、后端、共享包、数据模型、API、页面状态、风险边界和验证方式。
+
+已沉淀的关键技术方案包括：
+
+| 阶段               | 技术方案                                                                                                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 登录与基础链路     | [登录界面](./docs/dev_plan/001-login-page-ui.md)、[创作工作台与草稿](./docs/dev_plan/002-creation-workbench-drafts.md)、[创作者主页](./docs/dev_plan/003-creator-home.md)                                                                                                                  |
+| 审核发布闭环       | [审核评分发布](./docs/dev_plan/004-audit-scoring-publish.md)、[合规改写](./docs/dev_plan/011-compliance-rewrite-publish-review.md)、[模型审核与 Prompt 管理](./docs/dev_plan/012-model-audit-prompt-management.md)                                                                         |
+| 分发与反馈         | [信息流榜单互动](./docs/dev_plan/006-feed-ranking-analytics.md)、[创作者作品管理](./docs/dev_plan/010-creator-works-feedback.md)、[我的内容统一管理](./docs/dev_plan/014-creator-content-management.md)                                                                                    |
+| 稳定性与性能       | [端口避让](./docs/dev_plan/005-dev-port-resilience.md)、[Playwright Smoke E2E](./docs/dev_plan/013-playwright-smoke-e2e-delivery.md)、[榜单 LCP](./docs/dev_plan/019-ranking-infinite-scroll-lcp.md)                                                                                       |
+| 素材、多模态与资讯 | [素材与视觉审核](./docs/dev_plan/016-assets-cloud-vision-audit.md)、[多模态工作台](./docs/dev_plan/020-multimodal-generation-workbench.md)、[每日资讯预填](./docs/dev_plan/021-creator-daily-news-prefill.md)、[资讯 Redis 快照](./docs/dev_plan/022-creator-daily-news-redis-snapshot.md) |
+
+效果评估见 [docs/evaluation-report.md](./docs/evaluation-report.md)。该报告从 AI 生成、审核评分、分发反馈、性能和工程化五个维度总结当前 MVP 的完成情况和上线前建议。
+
+---
+
+## 八、交付与验收
+
+### 文档交付
+
+- [PRD](./docs/PRD.md)
 - [技术架构](./docs/architecture.md)
-- [内容安全审核规则与质量体系](./docs/audit-rules.md)
+- [内容安全审核规则与质量评估体系](./docs/audit-rules.md)
 - [评估与交付方案](./docs/evaluation-plan.md)
+- [效果评估报告](./docs/evaluation-report.md)
+- [功能技术方案目录](./docs/dev_plan)
+
+### CI 与本地验收
+
+GitHub Actions 已配置在 [.github/workflows/ci.yml](./.github/workflows/ci.yml)，推送到 `main/master` 或创建 Pull Request 时会执行：
+
+```text
+pnpm install
+pnpm prisma:generate
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+本地建议按以下顺序验收：
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm test:e2e:smoke
+pnpm test:e2e:rankings-performance
+```
+
+### 部署建议
+
+| 服务       | 推荐平台                                      |
+| ---------- | --------------------------------------------- |
+| Web        | Vercel                                        |
+| API        | Railway / Render / ECS / 其他 Node 运行环境   |
+| PostgreSQL | Railway Postgres / Supabase / Neon / 云数据库 |
+| Redis      | Upstash / Railway Redis / 云 Redis            |
+| 对象存储   | mock 演示或 S3-compatible 存储                |
+
+生产部署要点：
+
+- Web 设置 `NEXT_PUBLIC_API_BASE_URL` 指向 API 公网地址。
+- API 设置 `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET`、AI provider 和素材存储变量。
+- 首次部署后执行 Prisma migration；是否执行 seed 取决于是否需要演示数据。
+- API 部署后先检查 `/health`，再验证登录、创作、审核、发布和榜单链路。
+- Redis 不可用时，榜单会回退 PostgreSQL 排序；每日资讯会按实时接口、缓存、演示数据或空状态降级。
+- 真实生产环境应使用强 `JWT_SECRET`，不得提交真实 AI 密钥、数据库密码或对象存储密钥。
+
+### API 速览
+
+| 模块         | 接口                                                                                                                                                     |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 鉴权         | `POST /auth/register`、`POST /auth/login`                                                                                                                |
+| 用户与创作者 | `GET /users/me/creator-overview`                                                                                                                         |
+| AI 创作      | `POST /ai/generate-article`、`POST /ai/generate-article/stream`、`POST /ai/optimize-titles/stream`、`POST /ai/rewrite/stream`                            |
+| 多模态       | `POST /ai/generate-multimodal/stream`                                                                                                                    |
+| Prompt       | `GET /prompts`、`GET /prompts/:id`、`POST /prompts`、`POST /prompts/:id/copy`、`PATCH /prompts/:id`、`DELETE /prompts/:id`                               |
+| 草稿         | `POST /drafts`、`GET /drafts/mine`、`GET /drafts/:id`、`PATCH /drafts/:id`、`DELETE /drafts/:id`、`GET /drafts/:id/versions`、`POST /drafts/:id/restore` |
+| 素材         | `GET /assets/mine`、`POST /assets`、`GET /assets/:id/view`、`DELETE /assets/:id`、素材文件夹 CRUD                                                        |
+| 审核与评分   | `POST /audit/check`、`POST /audit/rewrite/stream`、`POST /scoring/article`                                                                               |
+| 发布与文章   | `POST /publish/:draftId`、`GET /articles/:id`、`POST /articles/:id/withdraw`                                                                             |
+| 分发与互动   | `GET /feed`、`GET /rankings/hot`、`GET /rankings/top`、`POST /articles/:id/events`                                                                       |
+| 每日资讯     | `GET /news/creator-daily`                                                                                                                                |
