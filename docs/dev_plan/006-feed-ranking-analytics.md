@@ -271,7 +271,7 @@ cursor=10
 - MVP 排序公式：
 
 ```text
-hot_rank_score = hot_score * 0.75 + freshness_score * 0.25
+hot_rank_score = round(hot_score * 0.75 + freshness_score * 0.25)
 ```
 
 - 返回结构复用 `CursorPageResponse<ArticleListItem>`。
@@ -417,10 +417,35 @@ rank_score =
 
 排序解释：
 
-- `hotScore = views * 1 + likes * 4 + favorites * 6`
-- `freshnessScore = 100 / (1 + hours_since_publish / 12)`
-- `feedbackScore = likes + favorites`
-- `rankScore` 使用 PRD 中的综合公式。
+```text
+qualityScore = latest quality_scores.overall
+hotScore = views * 1 + likes * 4 + favorites * 6
+freshnessScore = round(100 / (1 + hours_since_publish / 12))
+feedbackScore = likes + favorites
+
+rankScore =
+  qualityScore * 0.45 +
+  hotScore * 0.35 +
+  freshnessScore * 0.15 +
+  feedbackScore * 0.05
+
+hotRankScore = round(hotScore * 0.75 + freshnessScore * 0.25)
+```
+
+字段解释：
+
+| 字段             | 来源                       | 用途                           |
+| ---------------- | -------------------------- | ------------------------------ |
+| `qualityScore`   | 最新质量评分 `overall`     | 让发布前质量评价进入分发排序   |
+| `hotScore`       | 阅读、点赞、收藏事件聚合   | 表示内容消费规模和互动强度     |
+| `freshnessScore` | 当前时间与发布时间的小时差 | 给新内容曝光机会，避免榜单固化 |
+| `feedbackScore`  | 点赞数 + 收藏数            | 单独体现高价值正反馈           |
+
+排序口径：
+
+- 推荐流和爆文榜使用 `rankScore desc`，同分时按 `publishedAt desc`。
+- 热点榜先使用 `hotRankScore desc`，同分时再使用 `rankScore desc` 和发布时间。
+- Redis 写入 `rank:hot` 时使用 `hotRankScore`，写入 `rank:top` 时使用 `rankScore`。
 
 ### Redis 与 PostgreSQL 回退
 
@@ -451,17 +476,17 @@ draft -> audit -> scoring -> publish -> article snapshot
 
 ## 8. 风险、边界情况和回滚方案
 
-| 风险 | 处理 |
-| --- | --- |
-| 首页没有已发布文章 | 展示空状态和“去工作台创作”入口，并通过 seed 数据保证演示环境有内容 |
-| Redis 不可用 | 自动回退 PostgreSQL 查询和内存排序 |
-| 互动事件被重复写入 | MVP 前端用 localStorage 限制点赞/收藏；后端保留 append-only 事件，后续再做唯一约束 |
-| 榜单分页因实时排序变化出现重复 | MVP 使用 offset cursor，演示数据量小可接受；后续换成基于分数和 id 的稳定 cursor |
-| 阅读事件失败影响详情页 | 事件失败不阻塞正文展示 |
-| 排序查询一次读取太多数据 | MVP 限制榜单候选数量，例如最近 100 篇已发布文章；后续引入 Redis 定时刷新 |
-| 质量分缺失 | 使用 0 或默认分兜底，并在榜单解释中显示暂无评分 |
-| 用户未登录 | 内容浏览和互动仍允许匿名 userKey；创作入口继续需要登录 |
-| 当前工作区有无关改动 | 不覆盖 `apps/web/src/app/creator/page.tsx` 的现有未提交差异 |
+| 风险                           | 处理                                                                               |
+| ------------------------------ | ---------------------------------------------------------------------------------- |
+| 首页没有已发布文章             | 展示空状态和“去工作台创作”入口，并通过 seed 数据保证演示环境有内容                 |
+| Redis 不可用                   | 自动回退 PostgreSQL 查询和内存排序                                                 |
+| 互动事件被重复写入             | MVP 前端用 localStorage 限制点赞/收藏；后端保留 append-only 事件，后续再做唯一约束 |
+| 榜单分页因实时排序变化出现重复 | MVP 使用 offset cursor，演示数据量小可接受；后续换成基于分数和 id 的稳定 cursor    |
+| 阅读事件失败影响详情页         | 事件失败不阻塞正文展示                                                             |
+| 排序查询一次读取太多数据       | MVP 限制榜单候选数量，例如最近 100 篇已发布文章；后续引入 Redis 定时刷新           |
+| 质量分缺失                     | 使用 0 或默认分兜底，并在榜单解释中显示暂无评分                                    |
+| 用户未登录                     | 内容浏览和互动仍允许匿名 userKey；创作入口继续需要登录                             |
+| 当前工作区有无关改动           | 不覆盖 `apps/web/src/app/creator/page.tsx` 的现有未提交差异                        |
 
 回滚方案：
 

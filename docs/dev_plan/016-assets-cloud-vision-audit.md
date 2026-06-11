@@ -31,8 +31,8 @@
   -> 后端完成文件类型、大小和基础规则校验
   -> 图片文件交给视觉审核模型判断 PASS / WARN / BLOCK
   -> PASS / WARN 文件上传到云对象存储
-  -> 数据库保存素材记录、审核结果和 CDN URL
-  -> 前端素材列表读取 CDN URL
+  -> 数据库保存素材记录、审核结果、storageKey 和 CDN URL
+  -> 前端素材列表读取稳定渲染路径 /assets/:id/view
   -> 图片素材可插入 TipTap 正文
   -> 资料文件可管理和复制 CDN URL，不直接插入正文
   -> 多模态生成入口展示为后续能力，不阻塞保存和发布
@@ -42,6 +42,7 @@
 
 - 创作者主页的数据反馈继续来自真实文章、评分和互动事件，演示时能解释数据来源。
 - 图片和资料文件不落在应用本地磁盘，符合后续部署和 CDN 分发的方向。
+- 图片渲染不占用 API 静态文件带宽，浏览器可通过 OSS/CDN 读取图片资源，提升文章详情页图片加载能力。
 - 图片上传前后都有后端校验，视觉审核结果可追踪，避免把审核责任放到前端。
 - 编辑器可以直接插入已审核的云端图片素材，不再依赖用户手动输入外链。
 - 后续接入图生文、图文混合理解、资料辅助生成时，可以复用当前素材表和 CDN URL。
@@ -66,9 +67,11 @@
   - 默认支持 S3-compatible 配置，适配 AWS S3、Cloudflare R2、阿里云 OSS S3 兼容网关、腾讯云 COS 兼容层等对象存储。
   - 本地和测试环境使用 `mock` 模式，不访问外部网络，返回稳定的 CDN 风格 URL。
 - CDN URL：
-  - `Asset.url` 存储最终 CDN 地址，例如 `https://cdn.example.com/assets/{userId}/{assetId}.png`。
+  - 上传时 `asset.url` 写入云存储返回的原始 CDN 地址，例如 `https://cdn.example.com/assets/{userId}/{assetId}.png`。
   - `Asset.metadata.storageKey` 存储对象存储 key。
-  - 前端只使用 CDN URL 展示和插入，不接触云存储密钥。
+  - API 返回给前端的 `AssetSummary.url` 使用稳定渲染路径 `/assets/{assetId}/view`。
+  - 前端把该稳定路径转成 API 绝对地址并插入 TipTap 图片节点，不接触云存储密钥和临时签名 URL。
+  - 浏览器渲染图片时访问 `GET /assets/:id/view`，后端再 302 到 OSS/CDN 真实读取 URL。
 - 基础校验：
   - 图片支持 `image/png`、`image/jpeg`、`image/webp`、`image/gif`。
   - 资料文件支持 `text/plain`、`application/pdf`、`text/markdown`。
@@ -350,6 +353,7 @@ export interface DeleteAssetResponse {
 ```text
 GET    /assets/mine
 POST   /assets
+GET    /assets/:id/view
 DELETE /assets/:id
 ```
 
@@ -374,6 +378,7 @@ ASSET_SECRET_ACCESS_KEY=
 
 ASSET_AUDIT_MODE=mock
 ASSET_VISION_MODEL=
+PUBLIC_API_BASE_URL=http://localhost:3201
 ```
 
 说明：
@@ -516,18 +521,19 @@ auditImage(input: {
 
 ## 8. 风险、边界情况和回滚方案
 
-| 风险 | 处理 |
-| --- | --- |
-| 云存储密钥缺失 | 本地默认 `ASSET_STORAGE_MODE=mock`，live 部署前必须配置 |
-| 云存储上传失败 | 不写入素材记录，前端展示上传失败 |
-| CDN 域名配置错误 | mock 和测试校验 URL 拼接，部署时通过环境变量修正 |
-| 视觉审核模型不可用 | `live` 模式拒绝上传；`mock/auto` 模式按配置降级 |
-| 图片审核耗时较长 | 前端展示“视觉审核中”，按钮禁用防重复提交 |
-| 前端伪造 MIME 类型 | 后端以 MIME 白名单和文件后缀共同校验，后续可增加二进制嗅探 |
-| 文件名路径穿越 | 后端丢弃原路径，只保留安全 basename 和随机对象 key |
-| 用户删除已插入正文的图片素材 | 删除云对象可能导致正文旧图失效，删除前提示 |
-| 资料文件内容未深度审核 | 本阶段只做类型、大小和文件名规则校验，后续可加文本抽取审核 |
-| 粉丝数没有关注模型 | 后端返回 0，页面说明 MVP 未接入关注关系，不伪造数据 |
+| 风险                         | 处理                                                                       |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| 云存储密钥缺失               | 本地默认 `ASSET_STORAGE_MODE=mock`，live 部署前必须配置                    |
+| 云存储上传失败               | 不写入素材记录，前端展示上传失败                                           |
+| CDN 域名配置错误             | mock 和测试校验 URL 拼接，部署时通过环境变量修正                           |
+| OSS 签名 URL 过期            | 富文本中保存 `/assets/:id/view` 稳定路径，读取时由后端重新生成云存储读 URL |
+| 视觉审核模型不可用           | `live` 模式拒绝上传；`mock/auto` 模式按配置降级                            |
+| 图片审核耗时较长             | 前端展示“视觉审核中”，按钮禁用防重复提交                                   |
+| 前端伪造 MIME 类型           | 后端以 MIME 白名单和文件后缀共同校验，后续可增加二进制嗅探                 |
+| 文件名路径穿越               | 后端丢弃原路径，只保留安全 basename 和随机对象 key                         |
+| 用户删除已插入正文的图片素材 | 删除云对象可能导致正文旧图失效，删除前提示                                 |
+| 资料文件内容未深度审核       | 本阶段只做类型、大小和文件名规则校验，后续可加文本抽取审核                 |
+| 粉丝数没有关注模型           | 后端返回 0，页面说明 MVP 未接入关注关系，不伪造数据                        |
 
 回滚方案：
 
@@ -548,6 +554,8 @@ auditImage(input: {
   - 撤回文章不计入已发布作品数。
 - `apps/api/src/assets/assets.service.spec.ts`
   - 允许上传合法图片，并写入 CDN URL。
+  - 返回稳定素材渲染路径 `/assets/:id/view`。
+  - 访问稳定 view endpoint 时生成最新云存储读取 URL。
   - 允许上传合法资料文件，并写入 CDN URL。
   - 图片上传前会调用视觉审核服务。
   - `WARN` 图片可入库，审核状态为 `WARN`。

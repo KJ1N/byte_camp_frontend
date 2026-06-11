@@ -117,6 +117,7 @@
 - 首页、榜单和信息流使用分页或无限滚动，避免一次加载全部内容。
 - 榜单使用 Redis 缓存排序结果，Redis 失败时回退 PostgreSQL。
 - 每日资讯通过 `60s.viki.moe` 开放 API 获取，使用 Redis 当天快照和最近非空快照减少重复调用。
+- 上传图片和 AI 生成图片转存到 OSS/S3-compatible 对象存储，前端通过稳定 view URL 渲染，图片读取交给 OSS/CDN 链路。
 - AI 生成使用 SSE 分段返回，减少用户等待空白时间。
 - `scripts/e2e-rankings-performance.mjs` 提供榜单 LCP 与无限滚动性能 E2E。
 
@@ -127,6 +128,7 @@
 | 榜单首屏 LCP      | 已配置 Playwright 性能 E2E，阈值默认 2500ms           |
 | 榜单滚动加载      | 性能 E2E 覆盖热点榜和爆文榜滚动加载                   |
 | 首页性能          | 已采用分页加载，仍需线上 Lighthouse 补充正式报告      |
+| 图片渲染性能      | 已将图片二进制从 API/数据库剥离，渲染走 OSS/CDN 链路  |
 | AI 响应体验       | SSE 逐步渲染，避免长时间无反馈                        |
 | 开放 API 资讯性能 | Redis 快照减少重复请求，开放 API 失败不阻塞主创作链路 |
 

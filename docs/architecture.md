@@ -153,7 +153,7 @@ apps/api/src
 ├── drafts/        # 草稿与版本
 ├── prompts/       # Prompt 库
 ├── news/          # 每日 AI 资讯和每日热点资讯接入
-├── assets/        # 素材上传与校验
+├── assets/        # 素材上传、OSS/S3 存储与稳定渲染 URL
 ├── ai-gateway/    # 模型适配与 Prompt 装配
 ├── audit/         # 安全审核
 ├── scoring/       # 质量评分
@@ -210,6 +210,34 @@ AI Gateway 统一处理：
   "suggestions": ["补充案例", "优化结尾行动号召"]
 }
 ```
+
+### 6.4 素材上传、OSS 存储与渲染路径
+
+图片上传和渲染由后端素材模块闭环处理，前端不直接接触对象存储密钥，也不把临时签名 URL 写死到草稿正文。
+
+```text
+前端素材面板
+  -> POST /assets multipart/form-data
+  -> AssetsService 校验 MIME / 大小 / 文件名
+  -> AssetAuditService 执行图片视觉审核
+  -> CloudStorageService 上传到 OSS / S3-compatible bucket
+  -> PostgreSQL assets 保存 storageKey、cdnUrl、auditStatus、metadata
+  -> GET /assets/mine 返回稳定渲染路径 /assets/:id/view
+  -> 前端 resolveAssetUrl 转成 API 绝对地址并插入 TipTap 图片节点
+  -> 浏览器渲染图片时请求 GET /assets/:id/view
+  -> API 302 到 OSS/CDN 真实读取 URL
+```
+
+稳定渲染路径：
+
+| 场景         | 草稿 / 富文本中保存                        | 后端解析方式                                                                                                               |
+| ------------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| 用户上传图片 | `/assets/:id/view`                         | `AssetsController.view()` 调用 `AssetsService.getAssetReadUrl()`，再 302 到 `CloudStorageService.getObjectUrl(storageKey)` |
+| AI 生成图片  | `/assets/generated/:userId/:filename/view` | `GeneratedImageStorageService` 先转存图片，再通过 view endpoint 302 到对象存储读取 URL                                     |
+
+这层 view endpoint 用来隔离 OSS/CDN 的真实地址和签名参数。即使云存储读取 URL 需要重新签名，草稿和文章快照里的图片路径也不需要改。
+
+这也是性能优化：API 不直接承载大图文件分发，数据库和富文本只保存轻量 URL 与 `storageKey`，浏览器图片加载交给 OSS/CDN 缓存链路。文章详情页加载正文时不需要拉取图片二进制，图片由浏览器按资源加载策略独立请求。
 
 ## 7. 数据模型
 
@@ -300,7 +328,25 @@ GET /news/creator-daily
 
 ## 10. 榜单排序
 
-基础分：
+榜单排序由 `apps/api/src/ranking/ranking.service.ts` 统一计算，前端只展示排序结果和分数拆解。候选文章来自最近 100 篇 `PUBLISHED` 文章；每篇文章读取最新 `quality_scores.overall`、聚合后的阅读 / 点赞 / 收藏事件，以及发布时间。
+
+### 10.1 子分计算
+
+```text
+quality_score = latest quality_scores.overall
+hot_score = views * 1 + likes * 4 + favorites * 6
+freshness_score = round(100 / (1 + hours_since_publish / 12))
+feedback_score = likes + favorites
+```
+
+| 子分              | 来源                              | 设计目的                                                     |
+| ----------------- | --------------------------------- | ------------------------------------------------------------ |
+| `quality_score`   | 发布前 AI 质量评分，总分 0 到 100 | 防止榜单只按点击量排序，让内容质量参与分发                   |
+| `hot_score`       | 阅读、点赞、收藏聚合              | 阅读代表消费规模，点赞和收藏权重更高，代表更强正反馈         |
+| `freshness_score` | 发布时间到当前时间的小时差        | 给新文章基础曝光，发布 0 小时约 100 分，发布 12 小时约 50 分 |
+| `feedback_score`  | 点赞数 + 收藏数                   | 单独补充高价值互动，让用户认可进入排序解释                   |
+
+### 10.2 综合排序分
 
 ```text
 rank_score =
@@ -310,19 +356,36 @@ rank_score =
   feedback_score * 0.05
 ```
 
-热度分：
+示例：
 
 ```text
-hot_score = views * 1 + likes * 4 + favorites * 6 + comments * 8
+quality_score = 80
+views = 100
+likes = 10
+favorites = 5
+hours_since_publish = 12
+
+hot_score = 100 + 10 * 4 + 5 * 6 = 170
+freshness_score = round(100 / (1 + 12 / 12)) = 50
+feedback_score = 10 + 5 = 15
+rank_score = round(80 * 0.45 + 170 * 0.35 + 50 * 0.15 + 15 * 0.05) = 104
 ```
 
-时间衰减：
+### 10.3 不同榜单的排序口径
+
+| 场景       | 排序方式                                                         | 说明                             |
+| ---------- | ---------------------------------------------------------------- | -------------------------------- |
+| 推荐信息流 | `rank_score desc`，同分按 `publishedAt desc`                     | 兼顾内容质量、热度、新鲜度和反馈 |
+| 爆文榜     | `rank_score desc`，同分按 `publishedAt desc`                     | 展示综合表现最强的内容           |
+| 热点榜     | `hot_rank_score desc`，同分再按 `rank_score desc` 和发布时间排序 | 更强调正在被关注的内容           |
+
+热点榜使用独立分数：
 
 ```text
-freshness_score = 100 / (1 + hours_since_publish / 12)
+hot_rank_score = round(hot_score * 0.75 + freshness_score * 0.25)
 ```
 
-Redis 中存储实时榜单，PostgreSQL 中定期保存榜单快照，便于复盘和展示。
+Redis Sorted Set 缓存 `rank:hot` 和 `rank:top` 的文章 ID 顺序；Redis 不可用时，API 回退 PostgreSQL 查询与内存排序。PostgreSQL 中保存 `ranking_snapshots`，用于复盘每次榜单生成结果。
 
 ## 11. 部署架构
 
@@ -342,6 +405,13 @@ MVP 推荐：
 - `AI_API_KEY`
 - `AI_MODEL`
 - `ASSET_AUDIT_DOWNLOAD_TIMEOUT_MS`
+- `ASSET_STORAGE_MODE`
+- `ASSET_CDN_BASE_URL`
+- `ASSET_ENDPOINT`
+- `ASSET_BUCKET`
+- `ASSET_ACCESS_KEY_ID`
+- `ASSET_SECRET_ACCESS_KEY`
+- `PUBLIC_API_BASE_URL`
 - `NEWS_PROVIDER_MODE`
 - `NEWS_FETCH_TIMEOUT_MS`
 - `NEXT_PUBLIC_API_BASE_URL`

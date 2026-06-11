@@ -76,7 +76,7 @@ Seed 演示账号：
 | 合规改写         | WARN / BLOCK 内容可触发 AI 一键合规改写，生成替代表达后回写草稿，再重新审核发布。                                                                                    |
 | 发布与二次编辑   | 审核通过后生成文章快照和详情页；已发布内容可撤回，也可二次编辑并重新进入审核发布流程。                                                                               |
 | 信息流与榜单     | 首页推荐流、热点榜、爆文榜均由后端提供；Redis Sorted Set 缓存榜单，Redis 不可用时回退 PostgreSQL；阅读、点赞、收藏会影响排序和创作者数据反馈。                       |
-| 素材与多媒体     | 支持图片、txt、md、docx 资料上传；素材按文件夹管理；资料文本抽取后参与审核；图片支持视觉审核和发布前同源审核。                                                       |
+| 素材与多媒体     | 支持图片、txt、md、docx 资料上传；图片写入 OSS/S3-compatible 对象存储，编辑器保存稳定渲染路径 `/assets/:id/view`；资料文本抽取后参与审核。                           |
 | 多模态工作台     | 独立 `/multimodal-workspace` 支持生成正文、图片计划、图片状态和 1 到 4 张配图；生成结果可保存为富文本草稿并继续审核发布。                                            |
 | 每日资讯选题     | Creator 页面展示每日 AI 资讯和热点资讯；后端接入 `60s.viki.moe` 开放 API 获取 AI 资讯与热点数据，支持 Redis 当天快照、最近非空快照和手动刷新；资讯可一键预填工作台。 |
 | 自动化验证       | 已覆盖后端 Service/Controller 测试、前端 helper 测试、Playwright 主链路 smoke E2E、榜单 LCP 与无限滚动性能 E2E、GitHub Actions CI。                                  |
@@ -144,16 +144,16 @@ common        SSE 工具、健康检查、环境路径
 
 ### 关键设计与核心实现
 
-| 技术支柱       | 核心实现                                                                                                                     | 深入阅读                                                                                                                                     |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| AI 集中编排    | AI Gateway 统一处理模型配置、OpenAI-compatible 调用、Prompt 渲染、结构化解析、SSE 流、超时重试和 mock 降级。                 | [技术架构](./docs/architecture.md) · [模型接入方案](./docs/dev_plan/007-model-provider-integration.md)                                       |
-| 草稿编辑闭环   | 工作台生成后保存为草稿；编辑页支持富文本、自动保存、离线暂存、刷新恢复、版本历史、版本回滚和冲突提示。                       | [草稿方案](./docs/dev_plan/002-creation-workbench-drafts.md) · [离线同步方案](./docs/dev_plan/015-draft-offline-sync-and-redis-ranking.md)   |
-| 发布审核流水线 | 发布由后端强制触发审核和评分；正文与图片节点可拆分审核后聚合裁决；BLOCK 不发布，WARN 引导修改后重审。                        | [审核发布方案](./docs/dev_plan/004-audit-scoring-publish.md) · [审核规则](./docs/audit-rules.md)                                             |
-| 合规改写       | 对有风险的审核结果生成替代表达，返回富文本正文和建议，用户确认后写回草稿。                                                   | [合规改写方案](./docs/dev_plan/011-compliance-rewrite-publish-review.md)                                                                     |
-| 分发与榜单     | 基于质量分、热度、时间新鲜度和互动反馈计算 rank score；Redis 缓存榜单，失败时回退 PostgreSQL。                               | [分发方案](./docs/dev_plan/006-feed-ranking-analytics.md) · [榜单性能方案](./docs/dev_plan/019-ranking-infinite-scroll-lcp.md)               |
-| 素材与视觉审核 | 图片和资料上传后进行基础校验、资料文本抽取、视觉审核、云存储 URL 契约；发布前对正文图片进行同源审核。                        | [素材方案](./docs/dev_plan/016-assets-cloud-vision-audit.md) · [图片审核方案](./docs/dev_plan/023-publish-image-download-base64-audit.md)    |
-| 多模态生成     | 流式返回正文、图片计划、图片生成状态和完成图片；结果组合为 ProseMirror 富文本草稿。                                          | [多模态方案](./docs/dev_plan/020-multimodal-generation-workbench.md)                                                                         |
-| 每日资讯选题   | 后端接入 `60s.viki.moe` 开放 API 获取每日 AI 资讯与热点数据，支持 Redis 当天快照、最近非空快照、显式 mock 模式和工作台预填。 | [资讯预填方案](./docs/dev_plan/021-creator-daily-news-prefill.md) · [资讯缓存方案](./docs/dev_plan/022-creator-daily-news-redis-snapshot.md) |
+| 技术支柱       | 核心实现                                                                                                                                    | 深入阅读                                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI 集中编排    | AI Gateway 统一处理模型配置、OpenAI-compatible 调用、Prompt 渲染、结构化解析、SSE 流、超时重试和 mock 降级。                                | [技术架构](./docs/architecture.md) · [模型接入方案](./docs/dev_plan/007-model-provider-integration.md)                                       |
+| 草稿编辑闭环   | 工作台生成后保存为草稿；编辑页支持富文本、自动保存、离线暂存、刷新恢复、版本历史、版本回滚和冲突提示。                                      | [草稿方案](./docs/dev_plan/002-creation-workbench-drafts.md) · [离线同步方案](./docs/dev_plan/015-draft-offline-sync-and-redis-ranking.md)   |
+| 发布审核流水线 | 发布由后端强制触发审核和评分；正文与图片节点可拆分审核后聚合裁决；BLOCK 不发布，WARN 引导修改后重审。                                       | [审核发布方案](./docs/dev_plan/004-audit-scoring-publish.md) · [审核规则](./docs/audit-rules.md)                                             |
+| 合规改写       | 对有风险的审核结果生成替代表达，返回富文本正文和建议，用户确认后写回草稿。                                                                  | [合规改写方案](./docs/dev_plan/011-compliance-rewrite-publish-review.md)                                                                     |
+| 分发与榜单     | 基于质量分、热度、时间新鲜度和互动反馈计算 rank score；Redis 缓存榜单，失败时回退 PostgreSQL。                                              | [分发方案](./docs/dev_plan/006-feed-ranking-analytics.md) · [榜单性能方案](./docs/dev_plan/019-ranking-infinite-scroll-lcp.md)               |
+| 素材与视觉审核 | 图片和资料上传后进行基础校验、资料文本抽取、视觉审核；图片经 OSS/S3-compatible 存储后通过稳定 view URL 渲染，发布前对正文图片进行同源审核。 | [素材方案](./docs/dev_plan/016-assets-cloud-vision-audit.md) · [图片审核方案](./docs/dev_plan/023-publish-image-download-base64-audit.md)    |
+| 多模态生成     | 流式返回正文、图片计划、图片生成状态和完成图片；结果组合为 ProseMirror 富文本草稿。                                                         | [多模态方案](./docs/dev_plan/020-multimodal-generation-workbench.md)                                                                         |
+| 每日资讯选题   | 后端接入 `60s.viki.moe` 开放 API 获取每日 AI 资讯与热点数据，支持 Redis 当天快照、最近非空快照、显式 mock 模式和工作台预填。                | [资讯预填方案](./docs/dev_plan/021-creator-daily-news-prefill.md) · [资讯缓存方案](./docs/dev_plan/022-creator-daily-news-redis-snapshot.md) |
 
 ---
 
@@ -189,6 +189,7 @@ cp .env.example .env
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`                  | OpenAI-compatible 文本模型   | live 模式必须配置                              |
 | `AI_IMAGE_MODEL` / `AI_IMAGE_TIMEOUT_MS` / `AI_IMAGE_SIZE` | 图片生成配置                 | 多模态工作台可选                               |
 | `ASSET_STORAGE_MODE`                                       | 素材存储模式                 | `mock` 或 `s3`                                 |
+| `ASSET_CDN_BASE_URL` / `ASSET_ENDPOINT` / `ASSET_BUCKET`   | OSS/S3-compatible 渲染与上传 | 生产环境用于图片上传、读取和 CDN URL 拼接      |
 | `ASSET_AUDIT_MODE` / `ASSET_VISION_MODEL`                  | 图片与资料审核               | `auto` 会在凭据齐备时使用真实模型，否则 mock   |
 | `PUBLIC_API_BASE_URL`                                      | 稳定图片 URL 的 API 公网地址 | 生产部署建议配置                               |
 | `NEWS_PROVIDER_MODE` / `NEWS_FETCH_TIMEOUT_MS`             | 每日资讯开放 API 模式与超时  | `auto` 默认接入开放 API，`mock` 仅用于离线兜底 |
@@ -416,24 +417,32 @@ pnpm dev
 
 本地演示可使用 `ASSET_AUDIT_MODE=mock`。真实视觉审核需要配置 `AI_API_KEY`、`AI_MODEL` 或 `ASSET_VISION_MODEL`。发布前还会对正文中的图片节点进行聚合审核。
 
+### 图片上传后如何渲染
+
+图片上传后，API 先完成 MIME/大小校验和视觉审核，再把文件写入 `CloudStorageService` 管理的 OSS/S3-compatible 对象存储。数据库保存 `assets.metadata.storageKey` 和原始 `cdnUrl`，但返回给前端的是稳定路径 `/assets/:id/view`。编辑器把这个稳定路径写入 ProseMirror 图片节点；浏览器渲染时请求 API，API 再 302 到 OSS/CDN 真实读取地址。
+
+多模态生成图片也会被转存到对象存储，草稿中保存 `/assets/generated/:userId/:filename/view`。生产环境需要配置 `PUBLIC_API_BASE_URL`，保证已发布文章里的图片地址可以从公网访问。
+
+这条链路也属于性能优化：应用服务不承担大图静态分发，正文和数据库不保存图片二进制，图片读取交给 OSS/CDN 边缘缓存，文章详情页只保留轻量 URL 引用。
+
 ---
 
 ## 六、技术栈一览
 
-| 层级     | 选型                                                                |
-| -------- | ------------------------------------------------------------------- |
-| Monorepo | pnpm workspace                                                      |
-| 前端     | Next.js App Router · React · TypeScript · Tailwind CSS              |
-| 编辑器   | TipTap · ProseMirror JSON                                           |
-| 后端     | NestJS · TypeScript                                                 |
-| 数据库   | PostgreSQL · Prisma ORM                                             |
-| 缓存     | Redis Sorted Set                                                    |
-| AI       | OpenAI SDK 兼容模式 · 火山方舟 / 豆包等 OpenAI-compatible provider  |
-| 鉴权     | JWT · bcryptjs                                                      |
-| 素材     | mock CDN URL / S3-compatible object storage contract                |
-| 测试     | Node test runner · Controller/Service/helper tests · Playwright E2E |
-| 工程     | TypeScript · Prettier · GitHub Actions CI                           |
-| 部署建议 | Vercel · Railway / Render / ECS · 托管 PostgreSQL · Upstash / Redis |
+| 层级     | 选型                                                                    |
+| -------- | ----------------------------------------------------------------------- |
+| Monorepo | pnpm workspace                                                          |
+| 前端     | Next.js App Router · React · TypeScript · Tailwind CSS                  |
+| 编辑器   | TipTap · ProseMirror JSON                                               |
+| 后端     | NestJS · TypeScript                                                     |
+| 数据库   | PostgreSQL · Prisma ORM                                                 |
+| 缓存     | Redis Sorted Set                                                        |
+| AI       | OpenAI SDK 兼容模式 · 火山方舟 / 豆包等 OpenAI-compatible provider      |
+| 鉴权     | JWT · bcryptjs                                                          |
+| 素材     | OSS/S3-compatible object storage · stable `/assets/:id/view` render URL |
+| 测试     | Node test runner · Controller/Service/helper tests · Playwright E2E     |
+| 工程     | TypeScript · Prettier · GitHub Actions CI                               |
+| 部署建议 | Vercel · Railway / Render / ECS · 托管 PostgreSQL · Upstash / Redis     |
 
 ---
 
@@ -502,6 +511,7 @@ pnpm test:e2e:rankings-performance
 
 - Web 设置 `NEXT_PUBLIC_API_BASE_URL` 指向 API 公网地址。
 - API 设置 `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET`、AI provider 和素材存储变量。
+- 图片渲染需要配置 `PUBLIC_API_BASE_URL`，对象存储需要配置 `ASSET_STORAGE_MODE=s3`、`ASSET_CDN_BASE_URL`、`ASSET_ENDPOINT`、`ASSET_BUCKET`、`ASSET_ACCESS_KEY_ID` 和 `ASSET_SECRET_ACCESS_KEY`。
 - 首次部署后执行 Prisma migration；是否执行 seed 取决于是否需要演示数据。
 - API 部署后先检查 `/health`，再验证登录、创作、审核、发布和榜单链路。
 - Redis 不可用时，榜单会回退 PostgreSQL 排序；每日资讯默认请求开放 API，并按缓存或空状态降级。演示数据只在显式 `NEWS_PROVIDER_MODE=mock` 时使用。

@@ -184,12 +184,34 @@ quality_score =
 榜单排序公式：
 
 ```text
+quality_score = latest quality_scores.overall
+hot_score = views * 1 + likes * 4 + favorites * 6
+freshness_score = round(100 / (1 + hours_since_publish / 12))
+feedback_score = likes + favorites
+
 rank_score =
   quality_score * 0.45 +
   hot_score * 0.35 +
   freshness_score * 0.15 +
   feedback_score * 0.05
 ```
+
+字段说明：
+
+| 字段              | 说明                                                         |
+| ----------------- | ------------------------------------------------------------ |
+| `quality_score`   | 最新质量评分总分，来自发布前 AI 评分结果。                   |
+| `hot_score`       | 阅读、点赞、收藏聚合后的热度分；点赞和收藏权重大于普通阅读。 |
+| `freshness_score` | 时间新鲜度分，文章越新分数越高，12 小时约衰减到 50 分。      |
+| `feedback_score`  | 点赞和收藏组成的正反馈分。                                   |
+
+榜单差异：
+
+| 榜单       | 排序口径                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------ |
+| 推荐信息流 | 按 `rank_score` 综合排序，同分时新文章靠前。                                                     |
+| 爆文榜     | 按 `rank_score` 综合排序，突出质量、热度和反馈都好的内容。                                       |
+| 热点榜     | 使用 `hot_rank_score = round(hot_score * 0.75 + freshness_score * 0.25)`，突出短期热度和新鲜度。 |
 
 ### 6.7 每日资讯选题
 
