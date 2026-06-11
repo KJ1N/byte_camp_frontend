@@ -5,9 +5,11 @@ import { PromptOwner, type PromptTemplateSummary } from "@bytecamp-aigc/shared";
 import {
   canDeletePrompt,
   createDefaultPromptTemplate,
+  createFallbackPlatformPrompt,
   getPromptEditButtonLabel,
   getPromptEditAction,
   groupPromptTemplates,
+  includeFallbackPlatformPrompt,
   isPromptDraftValid,
   nextSelectedPromptIdAfterDelete,
   nextSelectedPromptIdAfterSave,
@@ -48,11 +50,38 @@ describe("prompt management helpers", () => {
   it("groups platform and private prompts for the workspace selector", () => {
     const groups = groupPromptTemplates([privatePrompt, platformPrompt]);
 
-    assert.deepEqual(groups.platform.map((prompt) => prompt.id), ["platform-1"]);
-    assert.deepEqual(groups.private.map((prompt) => prompt.id), ["private-1"]);
+    assert.deepEqual(
+      groups.platform.map((prompt) => prompt.id),
+      ["platform-1"],
+    );
+    assert.deepEqual(
+      groups.private.map((prompt) => prompt.id),
+      ["private-1"],
+    );
+  });
+
+  it("keeps the fallback default in the platform group after private prompts are added", () => {
+    const prompts = includeFallbackPlatformPrompt([privatePrompt], "multimodal_generation");
+    const groups = groupPromptTemplates(prompts);
+
+    assert.equal(groups.platform.length, 1);
+    assert.equal(groups.platform[0]?.name, "默认生成模板");
+    assert.equal(groups.platform[0]?.category, "multimodal_generation");
+    assert.deepEqual(
+      groups.private.map((prompt) => prompt.id),
+      ["private-1"],
+    );
+  });
+
+  it("does not add a fallback when a real platform prompt exists", () => {
+    assert.deepEqual(includeFallbackPlatformPrompt([privatePrompt, platformPrompt], "article_generation"), [
+      privatePrompt,
+      platformPrompt,
+    ]);
   });
 
   it("copies platform prompts before editing and directly edits private prompts", () => {
+    assert.equal(getPromptEditAction(createFallbackPlatformPrompt("multimodal_generation")), "create");
     assert.equal(getPromptEditAction(platformPrompt), "copy");
     assert.equal(getPromptEditAction(privatePrompt), "edit");
   });
@@ -69,6 +98,17 @@ describe("prompt management helpers", () => {
 
     assert.equal(getPromptEditButtonLabel(fallbackPrompt, ""), "修改");
     assert.equal(shouldDisablePromptEdit(fallbackPrompt, null), true);
+    assert.equal(shouldDisablePromptEdit(fallbackPrompt, "token"), false);
+  });
+
+  it("creates a multimodal default template with image output instructions", () => {
+    const template = createDefaultPromptTemplate("multimodal_generation");
+
+    assert.match(template, /配图方案/);
+    assert.match(template, /images JSON/);
+    assert.match(template, /{{topic}}/);
+    assert.match(template, /{{audience}}/);
+    assert.match(template, /{{style}}/);
   });
 
   it("validates prompt drafts before saving", () => {
@@ -116,13 +156,7 @@ describe("prompt management helpers", () => {
     assert.equal(canDeletePrompt(privatePrompt, "token"), true);
     assert.equal(canDeletePrompt(privatePrompt, null), false);
 
-    assert.equal(
-      nextSelectedPromptIdAfterDelete("private-1", "private-1", [platformPrompt]),
-      "platform-1",
-    );
-    assert.equal(
-      nextSelectedPromptIdAfterDelete("private-1", "platform-1", [platformPrompt]),
-      "platform-1",
-    );
+    assert.equal(nextSelectedPromptIdAfterDelete("private-1", "private-1", [platformPrompt]), "platform-1");
+    assert.equal(nextSelectedPromptIdAfterDelete("private-1", "platform-1", [platformPrompt]), "platform-1");
   });
 });

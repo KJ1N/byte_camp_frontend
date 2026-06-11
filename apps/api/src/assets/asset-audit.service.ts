@@ -177,9 +177,7 @@ export class AssetAuditService {
     const apiKey = this.readConfig("AI_API_KEY");
     const baseUrl = this.getLiveAuditUrl();
     const model = this.getLiveAuditModel();
-    console.log('[图片审核] 目标接口地址：', baseUrl);
-    console.log('[图片审核] Base64长度：', input.buffer.toString("base64")?.length || 0);
-
+    
     if (!apiKey || !model || this.isPlaceholder(apiKey) || this.isPlaceholder(model)) {
       throw new ServiceUnavailableException("视觉审核模型未配置。");
     }

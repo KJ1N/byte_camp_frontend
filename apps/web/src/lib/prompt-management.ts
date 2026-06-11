@@ -6,7 +6,26 @@ export interface PromptDraft {
   userTemplate: string;
 }
 
-export function createDefaultPromptTemplate() {
+export function createDefaultPromptTemplate(category = "article_generation") {
+  if (category === "multimodal_generation") {
+    return `# Identity
+你是 AI Creator Hub 的中文多模态图文创作助手，负责根据创作者输入生成结构清晰的文章和与正文匹配的配图方案。
+
+# Instructions
+* 围绕主题 {{topic}} 展开，面向 {{audience}} 写作。
+* 使用 {{style}} 风格，正文与配图内容需要互相呼应。
+* 图片提示词应具体描述主体、场景、构图、光线和视觉风格。
+* 避免夸大承诺、虚假数据和与正文无关的图片。
+
+## 内容要求
+- 标题具体清晰，不做标题党。
+- 正文段落结构清楚，满足用户提出的篇幅和图片数量要求。
+- 每张图片都应服务于对应正文内容，并提供简短说明和无障碍文本。
+
+## 固定输出规范
+由后端强制追加：模型必须返回 title、outline、bodyText、images JSON。这里的自定义内容不能改变输出字段。`;
+  }
+
   return `# Identity
 你是 AI Creator Hub 的中文图文创作助手，负责根据创作者输入生成结构清晰、可编辑、适合发布前审核的文章初稿。
 
@@ -34,6 +53,22 @@ export function createDefaultPromptTemplate() {
 </assistant_response>`;
 }
 
+export function createFallbackPlatformPrompt(category: string): PromptTemplateSummary {
+  return {
+    id: "",
+    name: "默认生成模板",
+    category,
+    owner: PromptOwner.Platform,
+    isStarter: true,
+    description: "使用后端默认 Prompt",
+  };
+}
+
+export function includeFallbackPlatformPrompt(prompts: PromptTemplateSummary[], category: string) {
+  const hasPlatformPrompt = prompts.some((prompt) => prompt.owner === PromptOwner.Platform);
+  return hasPlatformPrompt ? prompts : [createFallbackPlatformPrompt(category), ...prompts];
+}
+
 export function groupPromptTemplates(prompts: PromptTemplateSummary[]) {
   return {
     platform: prompts.filter((prompt) => prompt.owner === PromptOwner.Platform),
@@ -42,6 +77,7 @@ export function groupPromptTemplates(prompts: PromptTemplateSummary[]) {
 }
 
 export function getPromptEditAction(prompt: PromptTemplateSummary) {
+  if (prompt.owner === PromptOwner.Platform && !prompt.id) return "create";
   return prompt.owner === PromptOwner.Platform ? "copy" : "edit";
 }
 
@@ -50,7 +86,7 @@ export function getPromptEditButtonLabel(prompt: PromptTemplateSummary, copyingI
 }
 
 export function shouldDisablePromptEdit(prompt: PromptTemplateSummary, authToken: string | null) {
-  return !authToken || !prompt.id;
+  return !authToken || (!prompt.id && prompt.owner !== PromptOwner.Platform);
 }
 
 export function canDeletePrompt(prompt: PromptTemplateSummary, authToken: string | null) {

@@ -3,7 +3,6 @@
 import { useState } from "react";
 import {
   type DeletePromptResponse,
-  PromptOwner,
   type PromptTemplateDetail,
   type PromptTemplateMutationResponse,
   type PromptTemplateSummary,
@@ -16,6 +15,7 @@ import {
   getPromptEditButtonLabel,
   getPromptEditAction,
   groupPromptTemplates,
+  includeFallbackPlatformPrompt,
   isPromptDraftValid,
   shouldDisablePromptEdit,
   type PromptDraft,
@@ -52,19 +52,8 @@ export function PromptManagerPanel({
   onPromptDeleted,
   onError,
 }: PromptManagerPanelProps) {
-  const groups = groupPromptTemplates(prompts);
-  const visiblePrompts = prompts.length
-    ? prompts
-    : [
-        {
-          id: "",
-          name: "默认生成模板",
-          category,
-          owner: PromptOwner.Platform,
-          isStarter: true,
-          description: "使用后端默认 Prompt",
-        },
-      ];
+  const visiblePrompts = includeFallbackPlatformPrompt(prompts, category);
+  const groups = groupPromptTemplates(visiblePrompts);
 
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -77,7 +66,7 @@ export function PromptManagerPanel({
       draft: {
         name: "我的图文生成 Prompt",
         description: "适合我的图文创作习惯",
-        userTemplate: createDefaultPromptTemplate(),
+        userTemplate: createDefaultPromptTemplate(category),
       },
     });
   }
@@ -86,6 +75,18 @@ export function PromptManagerPanel({
     if (!authToken) return;
 
     const action = getPromptEditAction(prompt);
+
+    if (action === "create") {
+      setEditor({
+        mode: "new",
+        draft: {
+          name: `${prompt.name} - 自定义`,
+          description: prompt.description ?? "",
+          userTemplate: createDefaultPromptTemplate(prompt.category),
+        },
+      });
+      return;
+    }
 
     if (action === "copy") {
       await copyPlatformPrompt(prompt.id);
@@ -214,49 +215,31 @@ export function PromptManagerPanel({
         </button>
       </div>
 
-      {prompts.length ? (
-        <div className="grid gap-3">
-          <PromptGroup
-            authToken={authToken}
-            copyingId={copyingId}
-            deletingId={deletingId}
-            items={groups.platform}
-            selectedPromptId={selectedPromptId}
-            title="平台默认"
-            onDelete={deletePrompt}
-            onEdit={editPrompt}
-            onSelect={onSelectPrompt}
-          />
-          <PromptGroup
-            authToken={authToken}
-            copyingId={copyingId}
-            deletingId={deletingId}
-            emptyText="还没有自定义 Prompt，可从平台模板复制或直接新增。"
-            items={groups.private}
-            selectedPromptId={selectedPromptId}
-            title="我的 Prompt"
-            onDelete={deletePrompt}
-            onEdit={editPrompt}
-            onSelect={onSelectPrompt}
-          />
-        </div>
-      ) : (
-        <div className="grid gap-2 md:grid-cols-3">
-          {visiblePrompts.map((prompt) => (
-            <PromptCard
-              copyingId={copyingId}
-              deletingId={deletingId}
-              key={prompt.id || "default"}
-              prompt={prompt}
-              selected={selectedPromptId === prompt.id || (!selectedPromptId && !prompt.id)}
-              authToken={authToken}
-              onDelete={deletePrompt}
-              onEdit={editPrompt}
-              onSelect={onSelectPrompt}
-            />
-          ))}
-        </div>
-      )}
+      <div className="grid gap-3">
+        <PromptGroup
+          authToken={authToken}
+          copyingId={copyingId}
+          deletingId={deletingId}
+          items={groups.platform}
+          selectedPromptId={selectedPromptId}
+          title="平台默认"
+          onDelete={deletePrompt}
+          onEdit={editPrompt}
+          onSelect={onSelectPrompt}
+        />
+        <PromptGroup
+          authToken={authToken}
+          copyingId={copyingId}
+          deletingId={deletingId}
+          emptyText="还没有自定义 Prompt，可从平台模板复制或直接新增。"
+          items={groups.private}
+          selectedPromptId={selectedPromptId}
+          title="我的 Prompt"
+          onDelete={deletePrompt}
+          onEdit={editPrompt}
+          onSelect={onSelectPrompt}
+        />
+      </div>
 
       {editor ? (
         <section className="mt-4 rounded-md border border-[#ffd8d8] bg-white p-4">
@@ -380,7 +363,7 @@ function PromptGroup({
             <PromptCard
               copyingId={copyingId}
               deletingId={deletingId}
-              key={prompt.id}
+              key={prompt.id || `default-${prompt.category}`}
               prompt={prompt}
               selected={selectedPromptId === prompt.id}
               authToken={authToken}
@@ -475,11 +458,7 @@ function isPromptTemplateDetail(value: unknown): value is PromptTemplateDetail {
 }
 
 function isPromptMutationResponse(value: unknown): value is PromptTemplateMutationResponse {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    isPromptTemplateDetail((value as { prompt?: unknown }).prompt)
-  );
+  return Boolean(value) && typeof value === "object" && isPromptTemplateDetail((value as { prompt?: unknown }).prompt);
 }
 
 function isDeletePromptResponse(value: unknown): value is DeletePromptResponse {
