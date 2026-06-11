@@ -41,6 +41,7 @@ async function expectRankingPagePerformance(page: Page, tab: RankingTab) {
   await expect(rows).toHaveCount(10);
 
   const lcp = await readLcp(page);
+  console.log(`${tab} ranking LCP: ${Math.round(lcp)}ms`);
   expect(lcp).toBeGreaterThan(0);
   expect(lcp).toBeLessThanOrEqual(lcpThresholdMs);
 

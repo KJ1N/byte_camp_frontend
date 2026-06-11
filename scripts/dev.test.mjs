@@ -8,6 +8,8 @@ import {
   resolveDevConfig,
   shouldDryRun,
   startDevProcesses,
+  stopChildren,
+  stopProcessTree,
   waitForHttpOk,
 } from "./dev.mjs";
 
@@ -114,6 +116,95 @@ test("createPnpmSpawnCommand uses direct corepack spawn off Windows", () => {
 
   assert.equal(command.file, "corepack");
   assert.deepEqual(command.args, ["pnpm", "--version"]);
+});
+
+test("stopProcessTree waits for Windows taskkill to finish", async () => {
+  const killer = new EventEmitter();
+  const calls = [];
+  const child = {
+    pid: 1234,
+    killed: false,
+    unrefCalled: false,
+    kill() {
+      this.killed = true;
+    },
+    unref() {
+      this.unrefCalled = true;
+    },
+  };
+
+  let stopped = false;
+  const stopping = stopProcessTree(child, {
+    platform: "win32",
+    spawnProcess: (file, args, options) => {
+      calls.push({ file, args, options });
+      return killer;
+    },
+  }).then(() => {
+    stopped = true;
+  });
+
+  await Promise.resolve();
+  assert.equal(stopped, false);
+  assert.deepEqual(calls, [
+    {
+      file: "taskkill",
+      args: ["/pid", "1234", "/T", "/F"],
+      options: { stdio: "ignore", windowsHide: true },
+    },
+  ]);
+
+  killer.emit("close", 0);
+  await stopping;
+  assert.equal(stopped, true);
+  assert.equal(child.unrefCalled, true);
+});
+
+test("stopProcessTree falls back to child.kill when taskkill cannot start", async () => {
+  const killer = new EventEmitter();
+  const child = {
+    pid: 1234,
+    killed: false,
+    kill() {
+      this.killed = true;
+    },
+  };
+
+  const stopping = stopProcessTree(child, {
+    platform: "win32",
+    spawnProcess: () => killer,
+  });
+  killer.emit("error", new Error("taskkill unavailable"));
+  await stopping;
+
+  assert.equal(child.killed, true);
+});
+
+test("stopChildren waits for every process tree cleanup", async () => {
+  const killers = [new EventEmitter(), new EventEmitter()];
+  let nextKiller = 0;
+  let stopped = false;
+
+  const stopping = stopChildren(
+    [
+      { pid: 1, killed: false, kill() {} },
+      { pid: 2, killed: false, kill() {} },
+    ],
+    {
+      platform: "win32",
+      spawnProcess: () => killers[nextKiller++],
+    },
+  ).then(() => {
+    stopped = true;
+  });
+
+  killers[0].emit("close", 0);
+  await Promise.resolve();
+  assert.equal(stopped, false);
+
+  killers[1].emit("close", 0);
+  await stopping;
+  assert.equal(stopped, true);
 });
 
 test("waitForHttpOk retries until the endpoint returns a successful response", async () => {

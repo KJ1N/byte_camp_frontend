@@ -136,7 +136,9 @@ async function main() {
   try {
     await runPlaywright(config, baseEnv);
   } finally {
-    stopChildren(children);
+    console.log("Stopping E2E dev services...");
+    await stopChildren(children);
+    console.log("E2E dev services stopped.");
   }
 }
 

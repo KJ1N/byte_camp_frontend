@@ -147,7 +147,9 @@ async function main() {
     await waitForHttpOk({ url: `${webUrl}/rankings?tab=top`, timeoutMs: 180_000 });
     await runPlaywright(config, baseEnv);
   } finally {
-    stopChildren(children);
+    console.log("Stopping E2E dev services...");
+    await stopChildren(children);
+    console.log("E2E dev services stopped.");
   }
 }
 

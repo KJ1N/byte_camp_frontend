@@ -5,6 +5,7 @@ import net from "node:net";
 export const DEFAULT_WEB_PORT = 3200;
 export const DEFAULT_API_PORT = 3201;
 export const DEFAULT_MAX_PORT_ATTEMPTS = 50;
+const intentionalStop = Symbol("intentionalStop");
 
 export function parsePort(value, label) {
   if (value === undefined || value === "") {
@@ -211,30 +212,42 @@ function spawnPnpm(label, args, env) {
 
 export function stopProcessTree(child, { platform = process.platform, spawnProcess = spawn } = {}) {
   if (!child || child.killed) {
-    return;
+    return Promise.resolve();
   }
 
-  if (platform === "win32" && child.pid) {
-    const killer = spawnProcess("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
+  child[intentionalStop] = true;
 
-    killer.once("error", () => {
-      if (!child.killed) {
-        child.kill();
-      }
+  if (platform === "win32" && child.pid) {
+    return new Promise((resolve) => {
+      const killer = spawnProcess("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      let settled = false;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        child.unref?.();
+        resolve();
+      };
+
+      killer.once("error", () => {
+        if (!child.killed) {
+          child.kill();
+        }
+        finish();
+      });
+      killer.once("close", finish);
     });
-    return;
   }
 
   child.kill();
+  return Promise.resolve();
 }
 
-export function stopChildren(children, options) {
-  for (const child of children) {
-    stopProcessTree(child, options);
-  }
+export async function stopChildren(children, options) {
+  await Promise.allSettled(children.map((child) => stopProcessTree(child, options)));
 }
 
 export async function startDevProcesses(config, baseEnv = process.env, options = {}) {
@@ -256,19 +269,19 @@ export async function startDevProcesses(config, baseEnv = process.env, options =
     rejectStartupFailure = reject;
   });
 
-  const shutdown = (exitCode = 0) => {
+  const shutdown = async (exitCode = 0) => {
     if (stopping) {
       return;
     }
     stopping = true;
-    stopChildren(children);
+    await stopChildren(children);
     setExitCode(exitCode);
   };
 
   const trackChild = (label, child) => {
     children.push(child);
     child.once("exit", (code, signal) => {
-      if (stopping) {
+      if (stopping || child[intentionalStop]) {
         return;
       }
 
@@ -282,7 +295,7 @@ export async function startDevProcesses(config, baseEnv = process.env, options =
           new Error(`${reason} before the API became ready.`),
         );
       }
-      shutdown(exitCode);
+      void shutdown(exitCode);
     });
 
     return child;
@@ -321,8 +334,8 @@ export async function startDevProcesses(config, baseEnv = process.env, options =
   ));
 
   if (registerProcessSignals) {
-    process.once("SIGINT", () => shutdown(0));
-    process.once("SIGTERM", () => shutdown(0));
+    process.once("SIGINT", () => void shutdown(0));
+    process.once("SIGTERM", () => void shutdown(0));
   }
 
   return children;
