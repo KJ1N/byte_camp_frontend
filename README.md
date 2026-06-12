@@ -175,6 +175,8 @@ cp .env.example .env
 
 本项目统一读取仓库根目录 `.env`。不要在 `apps/api/.env` 或 `apps/web/.env` 维护另一份配置，避免端口、模型或密钥配置看起来已修改但运行时未生效。
 
+`pnpm prisma:generate`、`pnpm prisma:migrate` 和 `pnpm prisma:seed` 也会先加载仓库根目录 `.env`，无需把 `.env` 复制到 `apps/api`。
+
 重点检查：
 
 | 变量                                                       | 用途                         | 说明                                           |

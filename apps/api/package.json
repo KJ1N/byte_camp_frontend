@@ -11,9 +11,9 @@
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "node --test -r ts-node/register src/**/*.spec.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "prisma db seed"
+    "prisma:generate": "node scripts/run-prisma-with-root-env.mjs generate",
+    "prisma:migrate": "node scripts/run-prisma-with-root-env.mjs migrate dev",
+    "prisma:seed": "node scripts/run-prisma-with-root-env.mjs db seed"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
