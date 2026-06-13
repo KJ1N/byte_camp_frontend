@@ -6,11 +6,19 @@ import { AiProviderClient } from "./ai-provider.client";
 import { AiGatewayController } from "./ai-gateway.controller";
 import { AiGatewayService } from "./ai-gateway.service";
 import { AiRequestLogger } from "./ai-request-log";
+import { MultimodalGenerationQueueService } from "./multimodal-generation-queue.service";
+import { MultimodalGenerationWorker } from "./multimodal-generation.worker";
 
 @Module({
   imports: [AuthModule, PromptsModule, AssetStorageModule],
   controllers: [AiGatewayController],
-  providers: [AiGatewayService, AiProviderClient, AiRequestLogger],
+  providers: [
+    AiGatewayService,
+    AiProviderClient,
+    AiRequestLogger,
+    MultimodalGenerationQueueService,
+    MultimodalGenerationWorker,
+  ],
   exports: [AiGatewayService],
 })
 export class AiGatewayModule {}

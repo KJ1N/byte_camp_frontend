@@ -10,6 +10,8 @@ import type {
   GeneratedMultimodalDraft,
   GenerateArticleInput,
   GenerateMultimodalInput,
+  MultimodalGenerationProgress,
+  MultimodalGenerationProgressImage,
   MultimodalImagePlan,
   MultimodalImageResult,
   OptimizeTitlesInput,
@@ -149,6 +151,18 @@ interface MultimodalGenerationPlan {
   outline: string[];
   bodyText: string;
   images: MultimodalImagePlan[];
+}
+
+export class MultimodalGenerationCancelledError extends Error {
+  constructor() {
+    super("多模态生成任务已取消。");
+    this.name = "MultimodalGenerationCancelledError";
+  }
+}
+
+export interface MultimodalGenerationProgressOptions {
+  reportProgress?: (progress: MultimodalGenerationProgress) => void | Promise<void>;
+  shouldCancel?: () => boolean | Promise<boolean>;
 }
 
 @Injectable()
@@ -315,6 +329,186 @@ export class AiGatewayService {
       this.logAiRequestSuccess(metric, model, tokenUsage);
     } catch (error) {
       this.logAiRequestError(metric, error, model, tokenUsage);
+      throw error;
+    }
+  }
+
+  async generateMultimodalDraftWithProgress(
+    input: GenerateMultimodalInput,
+    userId: string,
+    options: MultimodalGenerationProgressOptions = {},
+  ): Promise<GeneratedMultimodalDraft> {
+    const shouldUseLiveProvider = this.shouldUseLiveProvider();
+    const textModel = shouldUseLiveProvider ? this.getConfiguredModelForLog() : this.getMockModel();
+    const imageModel = this.getConfiguredImageModel();
+    const metric = this.createAiRequestMetric(
+      "multimodal_generation",
+      shouldUseLiveProvider ? "live" : "mock",
+      textModel,
+    );
+    let tokenUsage = createEmptyAiTokenUsage();
+    let title = "";
+    let outline: string[] = [];
+    let bodyText = "";
+    let progressImages: MultimodalGenerationProgressImage[] = [];
+
+    try {
+      await this.assertMultimodalGenerationNotCancelled(options, {
+        stage: "cancelled",
+        percent: 0,
+        textModel,
+        imageModel,
+        images: progressImages,
+        updatedAt: new Date().toISOString(),
+      });
+
+      await this.reportMultimodalGenerationProgress(options, {
+        stage: "planning",
+        percent: 10,
+        textModel,
+        imageModel,
+        images: progressImages,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const plan = shouldUseLiveProvider
+        ? await this.generateLiveMultimodalPlan(input, userId, (usage) => {
+            tokenUsage = mergeAiTokenUsage(tokenUsage, usage);
+          })
+        : this.generateMockMultimodalPlan(input);
+
+      title = plan.title;
+      outline = plan.outline;
+      bodyText = plan.bodyText;
+      progressImages = plan.images.map((image, index) => ({
+        ...image,
+        index,
+        status: "pending",
+      }));
+
+      await this.assertMultimodalGenerationNotCancelled(options, {
+        stage: "cancelled",
+        percent: 40,
+        textModel: plan.textModel,
+        imageModel: plan.imageModel,
+        title,
+        outline,
+        bodyText,
+        images: progressImages,
+        updatedAt: new Date().toISOString(),
+      });
+
+      await this.reportMultimodalGenerationProgress(options, {
+        stage: "text_ready",
+        percent: progressImages.length ? 40 : 90,
+        textModel: plan.textModel,
+        imageModel: plan.imageModel,
+        title,
+        outline,
+        bodyText,
+        images: progressImages,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const completedImages: GeneratedImageResult[] = [];
+      const imageResults: MultimodalImageResult[] = [];
+
+      for (const [index, imagePlan] of plan.images.entries()) {
+        await this.assertMultimodalGenerationNotCancelled(options, {
+          stage: "cancelled",
+          percent: this.calculateMultimodalImagePercent(index, plan.images.length),
+          textModel: plan.textModel,
+          imageModel: plan.imageModel,
+          title,
+          outline,
+          bodyText,
+          images: progressImages,
+          updatedAt: new Date().toISOString(),
+        });
+
+        progressImages = progressImages.map((image) =>
+          image.index === index ? { ...image, status: "generating" } : image,
+        );
+
+        await this.reportMultimodalGenerationProgress(options, {
+          stage: "generating_images",
+          percent: this.calculateMultimodalImagePercent(index, plan.images.length),
+          textModel: plan.textModel,
+          imageModel: plan.imageModel,
+          title,
+          outline,
+          bodyText,
+          images: progressImages,
+          updatedAt: new Date().toISOString(),
+        });
+
+        const image = shouldUseLiveProvider
+          ? await this.generateLiveImageResult(imagePlan, index, userId)
+          : this.generateMockImageResult(imagePlan, index);
+
+        imageResults.push(image);
+
+        if (image.status === "completed") {
+          completedImages.push(image);
+        }
+
+        progressImages = progressImages.map((item) =>
+          item.index === index ? this.toMultimodalProgressImage(image) : item,
+        );
+
+        await this.reportMultimodalGenerationProgress(options, {
+          stage: "generating_images",
+          percent: this.calculateMultimodalImagePercent(index + 1, plan.images.length),
+          textModel: plan.textModel,
+          imageModel: plan.imageModel,
+          title,
+          outline,
+          bodyText,
+          images: progressImages,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      const finalDraft: GeneratedMultimodalDraft = {
+        textModel: plan.textModel,
+        imageModel: plan.imageModel,
+        title: plan.title,
+        outline: plan.outline,
+        bodyText: plan.bodyText,
+        images: imageResults,
+        body: this.toMultimodalRichTextDocument(plan.bodyText, completedImages),
+      };
+
+      await this.reportMultimodalGenerationProgress(options, {
+        stage: "completed",
+        percent: 100,
+        textModel: plan.textModel,
+        imageModel: plan.imageModel,
+        title,
+        outline,
+        bodyText,
+        images: progressImages,
+        updatedAt: new Date().toISOString(),
+      });
+
+      this.logAiRequestSuccess(metric, plan.textModel, tokenUsage);
+      return finalDraft;
+    } catch (error) {
+      if (!(error instanceof MultimodalGenerationCancelledError)) {
+        await this.reportMultimodalGenerationProgress(options, {
+          stage: "failed",
+          percent: progressImages.length ? 95 : 10,
+          textModel,
+          imageModel,
+          ...(title ? { title } : {}),
+          ...(outline.length ? { outline } : {}),
+          ...(bodyText ? { bodyText } : {}),
+          images: progressImages,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      this.logAiRequestError(metric, error, textModel, tokenUsage);
       throw error;
     }
   }
@@ -1112,6 +1306,53 @@ export class AiGatewayService {
       const ratio = (imageIndex + 1) / (imageCount + 1);
       return Math.max(0, Math.min(paragraphCount - 1, Math.floor(ratio * paragraphCount)));
     });
+  }
+
+  private async assertMultimodalGenerationNotCancelled(
+    options: MultimodalGenerationProgressOptions,
+    progress: MultimodalGenerationProgress,
+  ) {
+    if (!(await options.shouldCancel?.())) return;
+
+    await this.reportMultimodalGenerationProgress(options, progress);
+    throw new MultimodalGenerationCancelledError();
+  }
+
+  private async reportMultimodalGenerationProgress(
+    options: MultimodalGenerationProgressOptions,
+    progress: MultimodalGenerationProgress,
+  ) {
+    await options.reportProgress?.(progress);
+  }
+
+  private toMultimodalProgressImage(result: MultimodalImageResult): MultimodalGenerationProgressImage {
+    if (result.status === "completed") {
+      return {
+        index: result.index,
+        prompt: result.prompt,
+        caption: result.caption,
+        alt: result.alt,
+        status: "completed",
+        url: result.url,
+        model: result.model,
+      };
+    }
+
+    return {
+      index: result.index,
+      prompt: result.prompt,
+      caption: result.caption,
+      alt: result.alt,
+      status: "failed",
+      model: result.model,
+      message: result.message,
+    };
+  }
+
+  private calculateMultimodalImagePercent(completedOrCurrentIndex: number, totalImages: number) {
+    if (!totalImages) return 90;
+    const ratio = Math.max(0, Math.min(1, completedOrCurrentIndex / totalImages));
+    return Math.min(95, Math.round(45 + ratio * 45));
   }
 
   private async getArticleGenerationPrompt(promptId: string | undefined, userId: string | undefined): Promise<ArticleGenerationPrompt> {

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post, Res, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Res, UseGuards } from "@nestjs/common";
 import type {
   GenerateArticleInput,
   GenerateMultimodalInput,
@@ -9,11 +9,15 @@ import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/auth.guard";
 import { writeSse, type SseResponse } from "../common/sse";
 import { AiGatewayService } from "./ai-gateway.service";
+import { MultimodalGenerationQueueService } from "./multimodal-generation-queue.service";
 
 @Controller("ai")
 @UseGuards(JwtAuthGuard)
 export class AiGatewayController {
-  constructor(private readonly aiGatewayService: AiGatewayService) {}
+  constructor(
+    private readonly aiGatewayService: AiGatewayService,
+    private readonly multimodalGenerationQueueService: MultimodalGenerationQueueService,
+  ) {}
 
   @Post("generate-article")
   generateArticle(@CurrentUser("userId") userId: string, @Body() body: GenerateArticleInput) {
@@ -39,6 +43,31 @@ export class AiGatewayController {
   ) {
     const input = this.normalizeGenerateMultimodalInput(body);
     return writeSse(response, this.aiGatewayService.streamMultimodalDraft(input, userId));
+  }
+
+  @Post("multimodal-generations")
+  createMultimodalGenerationTask(
+    @CurrentUser("userId") userId: string,
+    @Body() body: GenerateMultimodalInput,
+  ) {
+    const input = this.normalizeGenerateMultimodalInput(body);
+    return this.multimodalGenerationQueueService.createTask(userId, input);
+  }
+
+  @Get("multimodal-generations/:taskId")
+  getMultimodalGenerationTask(
+    @CurrentUser("userId") userId: string,
+    @Param("taskId") taskId: string,
+  ) {
+    return this.multimodalGenerationQueueService.getTask(userId, this.normalizeTaskId(taskId));
+  }
+
+  @Delete("multimodal-generations/:taskId")
+  cancelMultimodalGenerationTask(
+    @CurrentUser("userId") userId: string,
+    @Param("taskId") taskId: string,
+  ) {
+    return this.multimodalGenerationQueueService.cancelTask(userId, this.normalizeTaskId(taskId));
   }
 
   @Post("optimize-titles/stream")
@@ -108,5 +137,14 @@ export class AiGatewayController {
     }
 
     return { topic, audience, style, promptId, imagePrompt, imageCount };
+  }
+
+  private normalizeTaskId(value: string) {
+    const taskId = value?.trim();
+    if (!taskId) {
+      throw new BadRequestException("Task id is required");
+    }
+
+    return taskId;
   }
 }

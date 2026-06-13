@@ -22,7 +22,7 @@
 | 富文本编辑 | TipTap / ProseMirror JSON                                | 编辑器内容以前后端可共享的结构化 JSON 存储                                                               |
 | 后端框架   | NestJS + TypeScript                                      | 承载鉴权、草稿、AI Gateway、审核、评分、发布和分发业务                                                   |
 | 数据库     | PostgreSQL + Prisma                                      | 存储用户、草稿、版本、审核记录、质量分、文章和互动数据                                                   |
-| 缓存/榜单  | Redis Sorted Set                                         | 承载热点榜、爆文榜、Prompt 缓存、限流和编辑锁等能力                                                      |
+| 缓存/榜单/队列 | Redis Sorted Set + BullMQ                                | 承载热点榜、爆文榜、Prompt 缓存、限流、编辑锁和多模态生成长任务队列                                       |
 | AI 接入    | OpenAI SDK 兼容模式                                      | 统一适配火山方舟、豆包或其他 OpenAI-compatible 模型供应商                                                |
 | 鉴权       | JWT + bcrypt                                             | 密码哈希存储，登录后签发 access token                                                                    |
 | 测试       | TypeScript typecheck、Jest/Vitest、Supertest、Playwright | 覆盖类型检查、服务单测、接口测试和端到端流程                                                             |
@@ -42,8 +42,10 @@ Next.js Web
 NestJS API
   |        |         |
   |        |         +--> AI Provider(OpenAI compatible / Volcano Ark / Doubao)
-  |        +------------> Redis(ranking, cache, rate limit)
+  |        +------------> Redis(ranking, cache, rate limit, BullMQ queue)
   +---------------------> PostgreSQL(Prisma)
+
+NestJS API 内部的 BullMQ Worker 会消费 Redis 中的多模态生成任务。MVP 阶段 Worker 与 API 同进程部署；后续任务量增长后，可以拆成独立 Worker 进程。
 ```
 
 ## 4. Monorepo 分层
@@ -154,7 +156,7 @@ apps/api/src
 ├── prompts/       # Prompt 库
 ├── news/          # 每日 AI 资讯和每日热点资讯接入
 ├── assets/        # 素材上传、OSS/S3 存储与稳定渲染 URL
-├── ai-gateway/    # 模型适配与 Prompt 装配
+├── ai-gateway/    # 模型适配、Prompt 装配与多模态 BullMQ 任务
 ├── audit/         # 安全审核
 ├── scoring/       # 质量评分
 ├── publish/       # 发布与快照
@@ -266,6 +268,9 @@ AI Gateway 统一处理：
 | `draft:lock:{id}`       | 编辑锁/版本冲突辅助 |
 | `audit:rate:{userId}`   | 审核接口限流        |
 | `cache:prompt:platform` | 平台 Prompt 缓存    |
+| `bull:ai-multimodal-generation:*` | BullMQ 多模态生成任务、进度、失败原因和完成结果 |
+
+多模态生成属于耗时长任务，不再依赖浏览器保持长 SSE 连接。前端调用 `POST /ai/multimodal-generations` 创建任务，BullMQ Worker 负责文本规划、图片生成、图片转存和进度更新，前端通过任务查询接口轮询进度。任务结果保留在 Redis 中；用户点击“保存草稿”后，正式内容才进入 PostgreSQL 的 `drafts` 表。
 
 ## 9. API 设计
 
@@ -283,6 +288,9 @@ GET  /users/me
 POST /ai/generate-outline
 POST /ai/generate-article
 POST /ai/rewrite
+POST /ai/multimodal-generations
+GET  /ai/multimodal-generations/:taskId
+DELETE /ai/multimodal-generations/:taskId
 GET  /prompts
 POST /prompts
 ```
@@ -415,6 +423,10 @@ MVP 推荐：
 - `NEWS_PROVIDER_MODE`
 - `NEWS_FETCH_TIMEOUT_MS`
 - `NEXT_PUBLIC_API_BASE_URL`
+- `MULTIMODAL_QUEUE_CONCURRENCY`
+- `MULTIMODAL_TASK_REMOVE_ON_COMPLETE_SECONDS`
+- `MULTIMODAL_TASK_REMOVE_ON_FAIL_SECONDS`
+- `MULTIMODAL_TASK_POLL_INTERVAL_MS`
 
 ## 12. 测试策略
 

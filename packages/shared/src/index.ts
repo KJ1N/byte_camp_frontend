@@ -123,6 +123,71 @@ export interface GeneratedMultimodalDraft {
   images: MultimodalImageResult[];
 }
 
+export type MultimodalGenerationTaskStatus =
+  | "queued"
+  | "active"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "not_found";
+
+export type MultimodalGenerationProgressStage =
+  | "queued"
+  | "planning"
+  | "text_ready"
+  | "generating_images"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type MultimodalGenerationProgressImageStatus =
+  | "pending"
+  | "generating"
+  | "completed"
+  | "failed";
+
+export interface MultimodalGenerationProgressImage extends MultimodalImagePlan {
+  index: number;
+  status: MultimodalGenerationProgressImageStatus;
+  url?: string;
+  model?: string;
+  message?: string;
+}
+
+export interface MultimodalGenerationProgress {
+  stage: MultimodalGenerationProgressStage;
+  percent: number;
+  textModel?: string;
+  imageModel?: string;
+  title?: string;
+  outline?: string[];
+  bodyText?: string;
+  images: MultimodalGenerationProgressImage[];
+  updatedAt: string;
+}
+
+export interface CreateMultimodalGenerationTaskResponse {
+  taskId: string;
+  status: "queued";
+  pollUrl: string;
+}
+
+export interface MultimodalGenerationTaskResponse {
+  taskId: string;
+  status: MultimodalGenerationTaskStatus;
+  progress: MultimodalGenerationProgress;
+  result?: GeneratedMultimodalDraft;
+  failedReason?: string;
+  createdAt?: string;
+  finishedAt?: string;
+}
+
+export interface CancelMultimodalGenerationTaskResponse {
+  taskId: string;
+  status: "cancelled" | "completed" | "failed" | "not_found";
+  message: string;
+}
+
 export interface CreatorInspiration {
   id: string;
   topic: string;

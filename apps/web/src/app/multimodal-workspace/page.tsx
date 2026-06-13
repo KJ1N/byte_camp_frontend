@@ -1,13 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AssetSummary,
+  CancelMultimodalGenerationTaskResponse,
+  CreateMultimodalGenerationTaskResponse,
   DraftSummary,
   GeneratedImageResult,
   GeneratedMultimodalDraft,
   ListPromptsResponse,
+  MultimodalGenerationTaskResponse,
   MultimodalImagePlan,
   MultimodalImageResult,
   PromptTemplateDetail,
@@ -20,10 +23,16 @@ import { AssetPanel } from "@/components/asset-panel";
 import { RichTextEditor } from "@/components/editor/rich-text-editor";
 import { PromptManagerPanel } from "@/components/prompt-manager-panel";
 import { apiFetch, getApiErrorMessage, readApiJson } from "@/lib/api";
-import { createAiSseParser } from "@/lib/ai-stream";
 import { formatAssetSize, resolveAssetUrl } from "@/lib/assets";
 import { clearAuthSession, getStoredToken, getStoredUser, type AuthUser } from "@/lib/auth";
 import { buildMultimodalGeneratedBody } from "@/lib/multimodal-generated-body";
+import {
+  defaultMultimodalTaskPollIntervalMs,
+  getMultimodalTaskMessage,
+  getWorkbenchStatusFromMultimodalTask,
+  multimodalImagesFromProgress,
+  shouldPollMultimodalTask,
+} from "@/lib/multimodal-task";
 import { nextSelectedPromptIdAfterDelete } from "@/lib/prompt-management";
 import {
   appendDocumentAttachment,
@@ -50,7 +59,17 @@ const defaultImagePrompt = "绘制一张信息图，展示通货膨胀的成因�
 const imagePromptGuide =
   "采用清晰明确的自然语言描述画面内容，对于细节比较丰富的图像，可通过详细的文本描述精准控制画面细节。";
 
-type WorkbenchStatus = "loading" | "idle" | "planning" | "streaming_text" | "generating_images" | "saving";
+type WorkbenchStatus =
+  | "loading"
+  | "idle"
+  | "queued"
+  | "planning"
+  | "text_ready"
+  | "streaming_text"
+  | "generating_images"
+  | "completed"
+  | "saving"
+  | "failed";
 type ImageStatus = "pending" | "generating" | "completed" | "failed";
 type PromptPanelMode = "text" | "image";
 
@@ -63,6 +82,7 @@ interface ImageViewState extends MultimodalImagePlan {
 }
 
 interface LocalDraftState {
+  taskId?: string;
   topic: string;
   audience: string;
   style: string;
@@ -114,6 +134,7 @@ export default function MultimodalWorkspacePage() {
   const [imageStates, setImageStates] = useState<ImageViewState[]>([]);
   const [draftTitle, setDraftTitle] = useState("");
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  const [taskId, setTaskId] = useState<string | null>(null);
   const [status, setStatus] = useState<WorkbenchStatus>("loading");
   const [error, setError] = useState("");
   const [sidePanelTab, setSidePanelTab] = useState<WorkspaceSidePanelTab>("ai");
@@ -122,6 +143,7 @@ export default function MultimodalWorkspacePage() {
   const [localSavedAt, setLocalSavedAt] = useState<string | null>(null);
   const [pendingExitHref, setPendingExitHref] = useState<string | null>(null);
   const [exitSaveStatus, setExitSaveStatus] = useState<"idle" | "saving">("idle");
+  const activeTaskIdRef = useRef<string | null>(null);
 
   const completedImages = useMemo(
     () =>
@@ -129,8 +151,10 @@ export default function MultimodalWorkspacePage() {
     [generated?.images],
   );
   const wordCount = useMemo(() => (generated ? plainTextFromRichText(generated.body).length : 0), [generated]);
-  const canSaveDraft = Boolean(token && generated && status !== "saving" && status !== "planning" && status !== "streaming_text" && status !== "generating_images");
+  const isGenerating = status === "queued" || status === "planning" || status === "text_ready" || status === "streaming_text" || status === "generating_images";
+  const canSaveDraft = Boolean(token && generated && status !== "saving" && !isGenerating);
   const hasLocalContent = Boolean(
+    taskId ||
     topic.trim() ||
       draftTitle.trim() ||
       generated?.title.trim() ||
@@ -143,8 +167,10 @@ export default function MultimodalWorkspacePage() {
     const storedToken = getStoredToken();
     const queryTopic = normalizeWorkspaceTopic(new URLSearchParams(window.location.search).get("topic"));
     const localDraft = readLocalDraft();
+    const restoredTaskId = localDraft?.taskId ?? null;
 
     if (localDraft) {
+      setTaskId(restoredTaskId);
       setTopic(queryTopic || localDraft.topic || defaultTopic);
       setAudience(localDraft.audience);
       setStyle(localDraft.style);
@@ -161,12 +187,16 @@ export default function MultimodalWorkspacePage() {
 
     setToken(storedToken);
     setUser(getStoredUser());
-    setStatus("idle");
+    setStatus(restoredTaskId ? "queued" : "idle");
     setLocalSaveReady(true);
 
     if (storedToken) {
       void loadDrafts(storedToken);
       void loadPrompts(storedToken, localDraft?.selectedPromptId ?? "");
+      if (restoredTaskId) {
+        activeTaskIdRef.current = restoredTaskId;
+        void pollMultimodalTask(storedToken, restoredTaskId);
+      }
     }
   }, []);
 
@@ -186,6 +216,7 @@ export default function MultimodalWorkspacePage() {
       style,
       imagePrompt,
       imageCount,
+      taskId: taskId ?? undefined,
       selectedPromptId,
       draftTitle,
       generated,
@@ -204,6 +235,7 @@ export default function MultimodalWorkspacePage() {
     localSaveReady,
     selectedPromptId,
     style,
+    taskId,
     topic,
   ]);
 
@@ -281,137 +313,157 @@ export default function MultimodalWorkspacePage() {
       return;
     }
 
-    setStatus("planning");
+    setStatus("queued");
     setError("");
     setDraftTitle("");
     setImageStates([]);
     setGenerated(createEmptyGenerated());
-
-    let bodyText = "";
-    let textModel = "streaming";
-    let imageModel = "doubao-seedream-4-5-251128";
-    let nextImages: MultimodalImageResult[] = [];
+    setTaskId(null);
+    activeTaskIdRef.current = null;
 
     try {
-      await streamRequest(
-        "/ai/generate-multimodal/stream",
-        token,
-        {
+      const response = await apiFetch("/ai/multimodal-generations", {
+        method: "POST",
+        authToken: token,
+        body: JSON.stringify({
           topic,
           audience,
           style,
           imagePrompt,
           imageCount,
           promptId: selectedPromptId || undefined,
-        },
-        (eventName, data) => {
-          if (eventName === "meta" && isRecord(data)) {
-            textModel = typeof data.textModel === "string" ? data.textModel : textModel;
-            imageModel = typeof data.imageModel === "string" ? data.imageModel : imageModel;
-            setGenerated((current) => ({
-              ...(current ?? createEmptyGenerated()),
-              textModel,
-              imageModel,
-            }));
-            setStatus("streaming_text");
-            return;
-          }
-
-          if (eventName === "title" && isRecord(data) && typeof data.text === "string") {
-            setDraftTitle(data.text);
-            setGenerated((current) => ({ ...(current ?? createEmptyGenerated()), title: data.text as string }));
-            return;
-          }
-
-          if (eventName === "outline" && isRecord(data) && Array.isArray(data.items)) {
-            const outline = data.items.filter((item): item is string => typeof item === "string");
-            setGenerated((current) => ({ ...(current ?? createEmptyGenerated()), outline }));
-            return;
-          }
-
-          if (eventName === "body-delta" && isRecord(data) && typeof data.text === "string") {
-            bodyText += data.text;
-            setGenerated((current) => ({
-              ...(current ?? createEmptyGenerated(textModel, imageModel)),
-              bodyText,
-              body: buildMultimodalGeneratedBody(bodyText, nextImages.filter(isCompletedImage)),
-            }));
-            return;
-          }
-
-          if (eventName === "image-plan" && isRecord(data) && Array.isArray(data.images)) {
-            const images = data.images.filter(isImagePlan).map((plan, index) => ({
-              ...plan,
-              index,
-              status: "pending" as const,
-            }));
-            setImageStates(images);
-            setStatus("generating_images");
-            return;
-          }
-
-          if (eventName === "image-status" && isRecord(data) && typeof data.index === "number") {
-            const nextStatus = data.status === "failed" ? "failed" : "generating";
-            setImageStates((items) =>
-              items.map((item) =>
-                item.index === data.index
-                  ? {
-                      ...item,
-                      status: nextStatus,
-                      message: typeof data.message === "string" ? data.message : item.message,
-                    }
-                  : item,
-              ),
-            );
-            return;
-          }
-
-          if (eventName === "image" && isCompletedImage(data)) {
-            nextImages = [...nextImages.filter((image) => image.index !== data.index), data].sort(
-              (left, right) => left.index - right.index,
-            );
-            setImageStates((items) =>
-              items.map((item) =>
-                item.index === data.index
-                  ? { ...item, status: "completed", url: data.url, model: data.model }
-                  : item,
-              ),
-            );
-            setGenerated((current) => ({
-              ...(current ?? createEmptyGenerated(textModel, imageModel)),
-              images: nextImages,
-              bodyText,
-              body: buildMultimodalGeneratedBody(bodyText, nextImages.filter(isCompletedImage)),
-            }));
-            return;
-          }
-
-          if (eventName === "done" && isGeneratedMultimodalDraft(data)) {
-            bodyText = data.bodyText;
-            nextImages = data.images;
-            setGenerated({
-              ...data,
-              body: isRichTextDocument(data.body)
-                ? data.body
-                : buildMultimodalGeneratedBody(data.bodyText, data.images.filter(isCompletedImage)),
-            });
-            setDraftTitle(data.title);
-            setImageStates((items) =>
-              items.map((item) => {
-                const result = data.images.find((image) => image.index === item.index);
-                if (!result) return item;
-                return result.status === "completed"
-                  ? { ...item, status: "completed", url: result.url, model: result.model }
-                  : { ...item, status: "failed", message: result.message, model: result.model };
-              }),
-            );
-          }
-        },
+        }),
+      });
+      const payload = await readApiJson<CreateMultimodalGenerationTaskResponse | { message?: string | string[] }>(
+        response,
       );
+
+      if (!response.ok || !payload || !("taskId" in payload)) {
+        setError(getApiErrorMessage(payload, "多模态任务创建失败，请稍后重试。"));
+        setStatus("idle");
+        return;
+      }
+
+      setTaskId(payload.taskId);
+      activeTaskIdRef.current = payload.taskId;
+      void pollMultimodalTask(token, payload.taskId);
+    } catch (taskError) {
+      setError(taskError instanceof Error ? taskError.message : "多模态任务创建失败，请稍后重试。");
       setStatus("idle");
-    } catch (streamError) {
-      setError(streamError instanceof Error ? streamError.message : "多模态生成失败，请稍后重试。");
+    }
+  }
+
+  async function pollMultimodalTask(authToken: string, nextTaskId: string) {
+    let failedReads = 0;
+
+    while (activeTaskIdRef.current === nextTaskId) {
+      try {
+        const response = await apiFetch(`/ai/multimodal-generations/${encodeURIComponent(nextTaskId)}`, {
+          authToken,
+        });
+        const payload = await readApiJson<MultimodalGenerationTaskResponse | { message?: string | string[] }>(
+          response,
+        );
+
+        if (!response.ok || !payload || !("status" in payload)) {
+          throw new Error(getApiErrorMessage(payload, "任务状态查询失败，请稍后重试。"));
+        }
+
+        failedReads = 0;
+        applyMultimodalTaskResponse(payload);
+
+        if (!shouldPollMultimodalTask(payload)) {
+          activeTaskIdRef.current = null;
+          setTaskId(null);
+          return;
+        }
+      } catch (pollError) {
+        failedReads += 1;
+        if (failedReads >= 3) {
+          activeTaskIdRef.current = null;
+          setError(pollError instanceof Error ? pollError.message : "任务状态查询失败，请稍后重试。");
+          setStatus("failed");
+          return;
+        }
+      }
+
+      await sleep(defaultMultimodalTaskPollIntervalMs);
+    }
+  }
+
+  function applyMultimodalTaskResponse(task: MultimodalGenerationTaskResponse) {
+    const nextStatus = getWorkbenchStatusFromMultimodalTask(task);
+    const message = getMultimodalTaskMessage(task);
+    const imageResults = task.result?.images ?? multimodalImagesFromProgress(task.progress);
+    const completed = imageResults.filter(isCompletedImage);
+    const nextTitle = task.result?.title ?? task.progress.title;
+    const nextOutline = task.result?.outline ?? task.progress.outline;
+    const nextBodyText = task.result?.bodyText ?? task.progress.bodyText;
+
+    setStatus(nextStatus);
+    if (message) {
+      setError(message);
+    } else if (nextStatus !== "failed") {
+      setError("");
+    }
+
+    setImageStates(readImageStatesFromTask(task));
+
+    if (nextTitle) setDraftTitle(nextTitle);
+
+    if (task.result) {
+      setGenerated({
+        ...task.result,
+        body: isRichTextDocument(task.result.body)
+          ? task.result.body
+          : buildMultimodalGeneratedBody(task.result.bodyText, completed),
+      });
+      return;
+    }
+
+    if (!nextTitle && !nextOutline?.length && !nextBodyText && !imageResults.length) return;
+
+    setGenerated((current) => {
+      const base = current ?? createEmptyGenerated(task.progress.textModel, task.progress.imageModel);
+      const bodyText = nextBodyText ?? base.bodyText;
+      return {
+        ...base,
+        textModel: task.progress.textModel ?? base.textModel,
+        imageModel: task.progress.imageModel ?? base.imageModel,
+        title: nextTitle ?? base.title,
+        outline: nextOutline ?? base.outline,
+        bodyText,
+        images: imageResults,
+        body: buildMultimodalGeneratedBody(bodyText, completed),
+      };
+    });
+  }
+
+  async function cancelMultimodalTask() {
+    if (!token || !taskId) return;
+
+    const cancellingTaskId = taskId;
+    activeTaskIdRef.current = null;
+
+    try {
+      const response = await apiFetch(`/ai/multimodal-generations/${encodeURIComponent(cancellingTaskId)}`, {
+        method: "DELETE",
+        authToken: token,
+      });
+      const payload = await readApiJson<CancelMultimodalGenerationTaskResponse | { message?: string | string[] }>(
+        response,
+      );
+
+      if (!response.ok || !payload || !("status" in payload)) {
+        setError(getApiErrorMessage(payload, "取消任务失败，请稍后重试。"));
+        return;
+      }
+
+      setTaskId(null);
       setStatus("idle");
+      setError(payload.message);
+    } catch {
+      setError("无法连接 API 服务，请稍后重试。");
     }
   }
 
@@ -520,6 +572,8 @@ export default function MultimodalWorkspacePage() {
       clearLocalDraft();
       setLocalSavedAt(null);
       setPendingExitHref(null);
+      setTaskId(null);
+      activeTaskIdRef.current = null;
       router.push(options?.afterSaveHref ?? `/drafts/${(payload as { id: string }).id}`);
       return true;
     } catch {
@@ -702,15 +756,24 @@ export default function MultimodalWorkspacePage() {
                     ))}
                   </div>
                 </fieldset>
-                <button
-                  className="h-11 rounded-md bg-[#ff4d4f] px-5 text-sm font-semibold text-white transition hover:bg-[#f04446] disabled:bg-[#f3a5a6]"
-                  disabled={status !== "idle" || !topic.trim() || !token}
-                  type="submit"
-                >
-                  {status === "planning" || status === "streaming_text" || status === "generating_images"
-                    ? "生成图文中..."
-                    : "生成图文初稿"}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    className="h-11 rounded-md bg-[#ff4d4f] px-5 text-sm font-semibold text-white transition hover:bg-[#f04446] disabled:bg-[#f3a5a6]"
+                    disabled={isGenerating || status === "saving" || !topic.trim() || !token}
+                    type="submit"
+                  >
+                    {isGenerating ? "生成图文中..." : "生成图文初稿"}
+                  </button>
+                  {taskId && isGenerating ? (
+                    <button
+                      className="h-11 rounded-md border border-[#dedede] bg-white px-4 text-sm font-semibold text-[#4e5661] transition hover:bg-[#f6f7f9]"
+                      type="button"
+                      onClick={() => void cancelMultimodalTask()}
+                    >
+                      取消
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </form>
 
@@ -778,8 +841,8 @@ export default function MultimodalWorkspacePage() {
           <div className="sticky bottom-0 z-30 flex flex-wrap items-center justify-between gap-4 border-t border-[#eeeeee] bg-white px-8 py-4">
             <div className="flex flex-wrap items-center gap-6 text-sm text-[#8f959e]">
               <span>
-                {status === "planning" || status === "streaming_text" || status === "generating_images"
-                  ? "AI 正在生成图文"
+                {isGenerating
+                  ? getGenerationStatusLabel(status)
                   : localSavedAt
                     ? `已本地保存 ${formatLocalSavedAt(localSavedAt)}`
                     : "草稿未保存"}
@@ -929,60 +992,19 @@ export default function MultimodalWorkspacePage() {
   );
 }
 
-async function streamRequest(
-  path: string,
-  authToken: string,
-  body: unknown,
-  onEvent: (eventName: string, data: unknown) => void,
-) {
-  const response = await apiFetch(path, {
-    method: "POST",
-    authToken,
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok || !response.body) {
-    const payload = await readApiJson<{ message?: string | string[] }>(response);
-    throw new Error(getApiErrorMessage(payload, "AI 流式请求失败，请稍后重试。"));
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let streamFinished = false;
-  const parser = createAiSseParser(({ event, data }) => {
-    if (event === "error") {
-      const message = isRecord(data) && typeof data.message === "string" ? data.message : "AI 流式生成失败。";
-      throw new Error(message);
-    }
-
-    if (event === "done") {
-      streamFinished = true;
-    }
-
-    onEvent(event, data);
-  });
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    parser.feed(decoder.decode(value, { stream: true }));
-  }
-
-  const tail = decoder.decode();
-  if (tail) {
-    parser.feed(tail);
-  }
-
-  if (!streamFinished) {
-    throw new Error("AI 流式连接已中断，请重试。");
-  }
-}
-
 function getImageStatusLabel(status: ImageStatus) {
   if (status === "completed") return "已完成";
   if (status === "generating") return "生成中";
   if (status === "failed") return "失败";
   return "等待中";
+}
+
+function getGenerationStatusLabel(status: WorkbenchStatus) {
+  if (status === "queued") return "任务排队中";
+  if (status === "planning") return "AI 正在规划图文";
+  if (status === "text_ready") return "正文已生成，等待配图";
+  if (status === "generating_images") return "AI 正在生成配图";
+  return "AI 正在生成图文";
 }
 
 function getImageStatusClass(status: ImageStatus) {
@@ -996,6 +1018,51 @@ function getImageStatusClass(status: ImageStatus) {
 function normalizeImageCountInput(value: string | number | undefined) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? Math.max(1, Math.min(4, Math.round(parsed))) : defaultImageCount;
+}
+
+function readImageStatesFromTask(task: MultimodalGenerationTaskResponse): ImageViewState[] {
+  if (task.progress.images.length) {
+    return task.progress.images.map((image) => ({
+      index: image.index,
+      prompt: image.prompt,
+      caption: image.caption,
+      alt: image.alt,
+      status: image.status,
+      url: image.url,
+      model: image.model,
+      message: image.message,
+    }));
+  }
+
+  return task.result?.images.map(imageResultToViewState) ?? [];
+}
+
+function imageResultToViewState(image: MultimodalImageResult): ImageViewState {
+  if (image.status === "completed") {
+    return {
+      index: image.index,
+      prompt: image.prompt,
+      caption: image.caption,
+      alt: image.alt,
+      status: "completed",
+      url: image.url,
+      model: image.model,
+    };
+  }
+
+  return {
+    index: image.index,
+    prompt: image.prompt,
+    caption: image.caption,
+    alt: image.alt,
+    status: "failed",
+    model: image.model,
+    message: image.message,
+  };
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1053,6 +1120,7 @@ function readLocalDraft(): LocalDraftState | null {
     }
 
     return {
+      taskId: typeof value.taskId === "string" && value.taskId.trim() ? value.taskId.trim() : undefined,
       topic: value.topic,
       audience: value.audience,
       style: value.style,
